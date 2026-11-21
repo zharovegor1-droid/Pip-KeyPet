@@ -44,4 +44,13 @@ int64_t shell_local_time(void);        /* seconds, already shifted to the local 
 void shell_battery(int percent, bool charging); /* from the power chip; -1 = unknown */
 int shell_battery_level(bool *charging);        /* -1 = unknown */
 const char *shell_battery_text(void);           /* "82%", "82%+" while charging, "--" */
+/* What the Settings app changes that lives in the host: the panel's brightness, and keeping everything (power, features,
+   brightness, privacy, energy saving). Any of them may be NULL (the simulator). */
+typedef struct {
+    int (*bright_get)(void);
+    void (*bright_set)(int pct);
+    void (*save)(void);
+} shell_settings_t;
+void shell_settings_host(const shell_settings_t *host);
+const shell_settings_t *shell_settings(void);
 lv_draw_buf_t *shell_icon(int icon);   /* the carousel's icon sprite, to reuse inside an app */

@@ -169,7 +169,7 @@ details p{margin:8px 0 0}
       </div></div>
 
       <div class="cards">
-        <div class="card wide">
+        <div class="card wide" hidden> <!-- the fork has no badge app: kept for the panel's script -->
           <h3>Бейдж</h3>
           <div class="badge">
             <div>
@@ -187,7 +187,7 @@ details p{margin:8px 0 0}
           </div>
         </div>
 
-        <div class="card wide">
+        <div class="card wide" hidden> <!-- the fork has no Quick QR app: kept for the panel's script -->
           <h3>Ссылки для Quick QR <b>· до четырёх</b></h3>
           <p class="muted">Пип покажет их QR-кодами, листаются свайпом. Ссылки на Telegram и Instagram получат значок в центре кода.</p>
           <div class="links" id="links">
@@ -209,7 +209,7 @@ details p{margin:8px 0 0}
               <option value="300">через 5 минут</option>
               <option value="0">никогда (батарея сядет быстро)</option>
             </select></div>
-          <p class="muted">Просыпается от касания, кнопки, если взять в руку, и при уведомлении. Бейдж, QR и фонарик не дают уснуть, пока открыты.</p>
+          <p class="muted">Просыпается от касания, кнопки, если взять в руку, и при уведомлении. Фонарик, таймер и пульт не дают уснуть, пока открыты. Звук, яркость, сон, уведомления и экономию можно менять и на самом брелоке: «Настройки» в меню.</p>
           <div><label for="bright">Яркость</label>
             <div class="range"><input type="range" id="bright" min="10" max="100" step="5" value="80"><output id="brightOut">80%</output></div></div>
           <div><label for="theme">Оформление</label>
@@ -294,7 +294,7 @@ const FEATS = [
   [1, 'Подуть', 'подуешь в микрофон — зажмурится'],
   [2, 'Сон экраном вниз', 'положишь экраном вниз — уснёт и погасит экран'],
   [3, 'Звук', 'Пип пищит, мурчит и ворчит'],
-  [4, 'Зарядка = еда', 'на зарядке радуется и наедается'],
+  [4, 'Радость на зарядке', 'поставишь на зарядку — обрадуется'],
   [6, 'Громкие звуки', 'хлопок рядом его пугает'],
 ];
 if (!('serial' in navigator)) $('nobrowser').hidden = false;

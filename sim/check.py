@@ -185,7 +185,9 @@ _, st = run("0.1:H1 " + flick0 + " 1.2:d233,300 1.25:m233,260 1.3:m233,244 1.6:u
 ok &= check("list menu: drag up a row, hold, let go, tap the middle -> music", st["screen"] == "music", st)
 _, st = run("0.1:H3 0.2:P 0.5:d233,330 0.53:m233,280 0.56:m233,230 0.59:m233,180 0.6:u 2.2:P", 2.6)
 ok &= check("list menu: a flick coasts several rows and lands on one", st["screen"] not in ("menu", "notify", "music"), st)
-app_ids = ["notify", "music", "remote", "clock", "timer", "stopwatch", "torch", "noise", "camera", "bt"]
+app_ids = ["notify", "music", "remote", "clock", "timer", "stopwatch", "torch", "noise", "camera", "bt", "settings"]
+_, st = run("0.3:osettings 0.6:d233,122 0.65:u 1.0:d233,338 1.05:u", 1.4)
+ok &= check("settings: a tap switches the sound off, another switches energy saving on", st["screen"] == "settings" and st["eco"] == "1", st)
 _, st = run("0.1:L2 0.4:N", 0.9)
 ok &= check("a notification shows a banner (its text hidden by default)", st["screen"] == "banner", st)
 _, st = run("0.1:L2 0.3:onotify 0.6:d233,86 0.65:u 0.9:B 1.3:N", 1.7)

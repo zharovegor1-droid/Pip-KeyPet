@@ -135,6 +135,8 @@ static void settings_load(void)
         nvs_close(h);
     }
     profile_on_change(profile_save);
+    static const shell_settings_t host = {.bright_get = settings_brightness, .bright_set = settings_bright, .save = settings_save};
+    shell_settings_host(&host); /* the Settings app on the keychain */
 }
 
 static void theme_keep(void)

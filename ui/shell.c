@@ -818,3 +818,7 @@ void shell_create(void)
     restyle_menu();
     apps_init();
 }
+
+static shell_settings_t settings_host;
+void shell_settings_host(const shell_settings_t *host) { settings_host = host ? *host : (shell_settings_t){0}; }
+const shell_settings_t *shell_settings(void) { return &settings_host; }

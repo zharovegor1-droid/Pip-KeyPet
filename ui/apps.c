@@ -666,6 +666,89 @@ static void nz_open(lv_obj_t *scr)
     nz_update(NULL);
 }
 
+/* ================= settings: a tap on a row steps its value; kept on the keychain by the host ================= */
+
+enum { ST_SOUND, ST_BRIGHT, ST_SLEEP, ST_PRIVACY, ST_ECO, ST_ROWS };
+static const int st_sleeps[] = {15, 30, 60, 120, 300, 0};
+static const int st_brights[] = {25, 50, 75, 100};
+static struct {
+    lv_obj_t *rows[ST_ROWS];
+    int bright; /* the simulator's own, when the host has none */
+} st = {.bright = 100};
+
+static int st_bright(void) { return shell_settings()->bright_get ? shell_settings()->bright_get() : st.bright; }
+
+static void st_text(int i)
+{
+    char t[48];
+    const char *v = "";
+    char num[16];
+    switch (i) {
+    case ST_SOUND: v = pip_feature_on(PIP_F_VOICE) ? "вкл" : "выкл"; break;
+    case ST_BRIGHT: snprintf(num, sizeof num, "%d%%", st_bright()), v = num; break;
+    case ST_SLEEP: {
+        int s = pip_power_after();
+        if (!s) v = "никогда";
+        else if (s < 60) snprintf(num, sizeof num, "%d с", s), v = num;
+        else snprintf(num, sizeof num, "%d мин", s / 60), v = num;
+        break;
+    }
+    case ST_PRIVACY: {
+        static const char *const p[] = {"открыто", "скрыто", "выкл"};
+        int m = phone_privacy();
+        v = m >= 0 && m < 3 ? p[m] : "?";
+        break;
+    }
+    case ST_ECO: v = pip_eco_on() ? "вкл" : "выкл"; break;
+    }
+    static const char *const names[ST_ROWS] = {"Звук", "Яркость", "Сон", "Уведомления", "Экономия"};
+    snprintf(t, sizeof t, "%s: %s", names[i], v);
+    lv_label_set_text(lv_obj_get_child(st.rows[i], 0), th_label(t));
+}
+
+static int st_next(const int *list, int n, int now)
+{
+    for (int k = 0; k < n; k++)
+        if (list[k] == now) return list[(k + 1) % n];
+    return list[0];
+}
+
+static void st_tap(lv_event_t *e)
+{
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    const shell_settings_t *h = shell_settings();
+    switch (i) {
+    case ST_SOUND:
+        pip_feature(PIP_F_VOICE, !pip_feature_on(PIP_F_VOICE));
+        if (pip_feature_on(PIP_F_VOICE)) voice_say(VOICE_HAPPY);
+        break;
+    case ST_BRIGHT: {
+        int b = st_next(st_brights, 4, st_bright());
+        if (h->bright_set) h->bright_set(b);
+        st.bright = b;
+        break;
+    }
+    case ST_SLEEP: pip_power(st_next(st_sleeps, 6, pip_power_after())); break;
+    case ST_PRIVACY: phone_set_privacy((phone_privacy() + 2) % 3); break; /* open -> off -> hidden -> open */
+    case ST_ECO: pip_eco(!pip_eco_on()); break;
+    }
+    if (h->save) h->save();
+    st_text(i);
+}
+
+static void settings_open(lv_obj_t *scr)
+{
+    if (TH_TERMINAL) th_header(scr, "пип-01 // настройки", 40);
+    else lv_obj_align(th_text(scr, th->small, th->dim, th_label("Настройки")), LV_ALIGN_TOP_MID, 0, 52);
+    for (int i = 0; i < ST_ROWS; i++) {
+        st.rows[i] = th_button_at(scr, 83, 100 + i * 54, 300, "", false, st_tap);
+        lv_obj_remove_event_cb(st.rows[i], st_tap);
+        lv_obj_add_event_cb(st.rows[i], st_tap, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        st_text(i);
+    }
+    if (TH_TERMINAL) th_footer(scr, TH_DOWN " назад", 392);
+}
+
 /* ================= the list: the first one sits in the middle of the honeycomb ================= */
 
 const app_t apps[] = {
@@ -686,6 +769,7 @@ const app_t apps[] = {
     {.id = "camera", .name = "Камера", .icon = ICON_CAMERA, .color = 0x30D158, .open = phone_camera_open, .close = phone_camera_close,
      .button = phone_camera_button, .awake = true},
     {.id = "bt", .name = "Bluetooth", .icon = ICON_BT, .color = 0x0A84FF, .open = phone_bt_open, .close = phone_bt_close},
+    {.id = "settings", .name = "Настройки", .icon = ICON_THEME, .color = 0x8E8E93, .open = settings_open},
 };
 const int app_total = sizeof apps / sizeof apps[0];
 const int app_count = app_total; /* all of them are in the menu */
