@@ -49,7 +49,7 @@ EMSCRIPTEN_KEEPALIVE void sim_button(int id) { shell_button(id); }
 EMSCRIPTEN_KEEPALIVE void sim_button_up(int id) { shell_button_up(id); }
 EMSCRIPTEN_KEEPALIVE void sim_key(int k) { pip_key((char)k); }
 EMSCRIPTEN_KEEPALIVE void sim_time(double unix_s, int tz_min) { shell_time((int64_t)unix_s, tz_min); }
-EMSCRIPTEN_KEEPALIVE void sim_action(int act) { pip_action(act); }
+EMSCRIPTEN_KEEPALIVE void sim_action(int act) { (void)act; } /* feed / play: the tamagotchi is cut out */
 EMSCRIPTEN_KEEPALIVE void sim_auto(int on) { pip_auto(on); }
 /* persistence: JS copies the pet state to localStorage and back through this buffer */
 static uint8_t pet_buf[256];
@@ -96,10 +96,9 @@ EMSCRIPTEN_KEEPALIVE const char *sim_status(void)
     pip_get_info(&in);
     snprintf(buf, sizeof buf,
              "{\"mood\":\"%s\",\"reaction\":\"%s\",\"steps\":%d,\"tilt\":[%.2f,%.2f],\"shake\":%.2f,\"faceDown\":%s,"
-             "\"food\":%.3f,\"energy\":%.3f,\"fun\":%.3f,\"love\":%.3f,\"walk\":%.3f,\"dayMood\":%.2f,"
              "\"asleep\":%s,\"auto\":%s,\"hour\":%d,\"screen\":\"%s\"}",
              in.mood, in.reaction, in.steps, in.tilt_x, in.tilt_y, in.shake, in.face_down ? "true" : "false",
-             in.food, in.energy, in.fun, in.love, in.walk, in.day_mood, in.asleep ? "true" : "false",
+             in.asleep ? "true" : "false",
              in.auto_mood ? "true" : "false", in.hour, shell_where());
     return buf;
 }

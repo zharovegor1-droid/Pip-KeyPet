@@ -5,10 +5,10 @@
      @N a,b,c           mood names, in order
      @K name value min max   one knob of the mood tree (pet_knobs[]), a line each, then
      @T {json}          the urges [need, line, mood, other face]
-   why = [kind, which, value]: the branch of the tree that picked the mood (ui/pet.h pet_mood_why).
-   Commands in: mood <i> | auto | react <i> <s> | need <0-4> <v> | day <v> | annoy <v> | urge <i> <line>
-                pool <great> <good> <meh> | set <knob> <v> | feat <f> <0|1> | eco <0|1> | bat [clear] | demo <s> [i ...] | hist | names | tune
-                open <app> | home | btn <0|1> | meet | feed | play | sleep | wake | rare [mood] | game <0 won|1 lost|2 record> */
+   why = [kind, 0, value]: why the base mood (ui/pet.h pet_mood_why: asleep, a fright, calm). The tamagotchi is cut out:
+   the needs, day mood and valence fields stay in @S/@H for the debug page, always zero.
+   Commands in: mood <i> | auto | react <i> <s> | set <knob> <v> | feat <f> <0|1> | eco <0|1> | bat [clear]
+                demo <s> [i ...] | hist | names | tune | open <app> | home | btn <0|1> | sleep | wake */
 #include "board.h"
 #include "esp_pm.h"
 #include "driver/usb_serial_jtag.h"
@@ -98,7 +98,7 @@ static void status(void)
     pip_get_info(&in);
     pet_t *p = pip_pet();
     pet_why_t w;
-    pet_mood_why(p, tz_min, &w);
+    pet_mood_why(p, &w);
     bool ch;
     int bat = shell_battery_level(&ch);
     unsigned feat = 0;
@@ -111,12 +111,11 @@ static void status(void)
              "\"an\":%.2f,\"v\":%.3f,\"h\":%d,\"why\":[%d,%d,%.3f],\"st\":%d,\"bat\":%d,\"ch\":%d,\"db\":%.0f,\"fms\":%.1f,"
              "\"feat\":%u,\"scr\":\"%s\",\"t\":%lld,\"demo\":%d,\"af\":[%d,%d,%lld],\"rare\":[%d,%lld],\"un\":%.2f,\"wk\":%.1f,"
              "\"wake\":%lld,\"pool\":%d,\"hold\":[%d,%lld],\"fw\":[%.0f,\"%s\",\"%s\"]}\n",
-             in.mood, pip_find_mood(in.mood), in.reaction, in.auto_mood, in.asleep, p->food, p->energy, p->fun, p->love, p->walk,
-             p->day_mood, p->annoy, pet_valence(p), in.hour, w.kind, w.which, w.value, in.steps, bat, ch, mic_on() ? mic_db() : -1,
+             in.mood, pip_find_mood(in.mood), in.reaction, in.auto_mood, in.asleep, 0.0, 0.0, 0.0, 0.0, 0.0,
+             0.0, 0.0, 0.0, in.hour, w.kind, 0, w.value, in.steps, bat, ch, mic_on() ? mic_db() : -1,
              in.frame_ms, feat, shell_where(), (long long)time(NULL), demo_s,
-             p->after_mood, p->after_why, (long long)(p->after_until - p->last), p->rare_mood, (long long)(p->rare_at - p->last),
-             p->unseen, p->stride, (long long)(p->woke_at ? p->last - p->woke_at : -1), p->pool, p->hold,
-             (long long)(p->hold >= 0 ? p->last - p->hold_since : 0), fw, fw_mood, fw_react);
+             p->after_mood, 0, (long long)(p->after_until - p->last), -1, 0LL,
+             0.0, 0.0, -1LL, -1, -1, 0LL, fw, fw_mood, fw_react);
     put(b);
 }
 
@@ -127,12 +126,9 @@ static void hist_add(void)
     pip_get_info(&in);
     pet_t *p = pip_pet();
     pet_why_t w;
-    pet_mood_why(p, tz_min, &w);
+    pet_mood_why(p, &w);
     hist_t *h = &hist[hist_at];
-    *h = (hist_t){(int32_t)time(NULL), (uint8_t)pip_find_mood(in.mood), {0}, (uint8_t)(w.kind * 16 + w.which),
-                  (int8_t)(p->day_mood * 100), (int8_t)(pet_valence(p) * 100), p->asleep, {'P', 'h'}};
-    const float n[5] = {p->food, p->energy, p->fun, p->love, p->walk};
-    for (int i = 0; i < 5; i++) h->need[i] = (uint8_t)(n[i] * 255);
+    *h = (hist_t){(int32_t)time(NULL), (uint8_t)pip_find_mood(in.mood), {0}, (uint8_t)(w.kind * 16), 0, 0, p->asleep, {'P', 'h'}};
     ring_put(h);
     hist_at = (hist_at + 1) % HIST_N;
     if (hist_n < HIST_N) hist_n++;
@@ -168,16 +164,8 @@ static void tune(void)
         snprintf(b, sizeof b, "@K %s %.4g %.4g %.4g\n", k->name, *k->v, k->min, k->max);
         put(b);
     }
-    int n = snprintf(b, sizeof b, "@T {\"urges\":[");
-    for (int i = 0; i < PET_URGES; i++) {
-        const pet_urge_t *u = &pet_tune.urges[i];
-        n += snprintf(b + n, sizeof b - n, "%s[%d,%.3f,%d,%d]", i ? "," : "", u->need, u->line, u->mood, u->alt);
-    }
-    snprintf(b + n, sizeof b - n, "]}\n");
-    put(b);
+    put("@T {\"urges\":[]}\n");
 }
-
-static float clamp01(float v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 
 static void json_str(char *b, size_t n, const char *s) /* a JSON string, quoted, with " and \\ escaped */
 {
@@ -260,16 +248,7 @@ static void command(char *line)
     if (!strcmp(c, "mood") && n > 1) pip_set_mood((int)a1);
     else if (!strcmp(c, "auto")) pip_auto(true), demo_s = 0;
     else if (!strcmp(c, "react") && n > 1) pip_react((int)a1, n > 2 ? a2 : 3, pip_mood_name((int)a1));
-    else if (!strcmp(c, "need") && n > 2) {
-        float *v[5] = {&p->food, &p->energy, &p->fun, &p->love, &p->walk};
-        if (a1 >= 0 && a1 < 5) *v[(int)a1] = clamp01(a2);
-    } else if (!strcmp(c, "day") && n > 1) p->day_mood = a1 < -1 ? -1 : a1 > 1 ? 1 : a1;
-    else if (!strcmp(c, "annoy") && n > 1) p->annoy = a1 < 0 ? 0 : a1;
-    else if (!strcmp(c, "urge") && n > 2 && a1 >= 0 && a1 < PET_URGES) pet_tune.urges[(int)a1].line = a2 < 0.01f ? 0.01f : a2;
-    else if (!strcmp(c, "pool") && n > 3) pet_tune.great = a1, pet_tune.good = a2, pet_tune.meh = strtof(arg[3], NULL);
     else if (!strcmp(c, "set") && n > 2 && pet_knob(arg[1])) *pet_knob(arg[1]) = a2;
-    else if (!strcmp(c, "rare")) pet_rare_now(p, n > 1 ? pip_find_mood(arg[1]) : -1);
-    else if (!strcmp(c, "game") && n > 1 && a1 >= 0 && a1 <= 2) pip_game((int)a1);
     else if (!strcmp(c, "feat") && n > 2) pip_feature((int)a1, a2 != 0), settings_save();
     else if (!strcmp(c, "power") && n > 1) pip_power((int)a1), settings_save();      /* seconds to sleep, 0 never */
     else if (!strcmp(c, "eco") && n > 1) pip_eco(a1 != 0), settings_save();              /* energy saving */
@@ -285,15 +264,12 @@ static void command(char *line)
     } else if (!strcmp(c, "open") && n > 1) shell_open(arg[1]);
     else if (!strcmp(c, "home")) shell_home();
     else if (!strcmp(c, "btn") && n > 1) shell_button((int)a1), shell_button_up((int)a1); /* a press, let go at once */
-    else if (!strcmp(c, "meet")) pip_meet();
     else if (!strcmp(c, "update")) shell_updating(); /* the panel flashes next */
     else if (!strcmp(c, "dev")) pip_dev(n > 1 ? a1 != 0 : !pip_dev_on()); /* the developer overlay */
-    else if (!strcmp(c, "feed")) pip_action(PIP_ACT_FEED);
-    else if (!strcmp(c, "play")) pip_action(PIP_ACT_PLAY);
     else if (!strcmp(c, "sleep")) pet_event(p, PET_SLEEP);
     else if (!strcmp(c, "wake")) pet_event(p, PET_WAKE);
     ui_unlock();
-    if (!strcmp(c, "urge") || !strcmp(c, "pool") || !strcmp(c, "set")) tune();
+    if (!strcmp(c, "set")) tune();
 }
 
 static void debug_task(void *arg)

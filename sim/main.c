@@ -11,13 +11,11 @@
                  p<id>          side button (0 PWR, 1 BOOT)
                  n<name>        pin a mood by name, e.g. nrage (A turns the automatic mood back on)
                  T<hours>       jump the wall clock (the run starts at 2026-10-10 12:00 UTC)
-                 F / G          feed / play
-                 o<app>         open an app (clock, care, qr, timer, torch, ball, notify, music, camera)
+                 o<app>         open an app (notify, music, remote, clock, timer, stopwatch, torch, noise, camera, bt)
                  P / B          top (PWR) / bottom (BOOT) side button; B<s> holds the bottom one s seconds
                  Y              next menu style (honeycomb, carousel, list)
                  H<n>           theme: 0 Тишина, 1 Приборка, 2 Apple, 3 Диагностика
-                 K<knob>=<v>    set a mood-tree knob (pet_knobs[] in ui/pet.c), e.g. Kmeet_shy=1
-                 R[name]        a rare card now (stoned or pinkeye; random without a name)
+                 K<knob>=<v>    set a knob (pet_knobs[] in ui/pet.c), e.g. Kloud_db=70
                  L<0|1|2> N C<0|1> M<0|1>  the fake iPhone: link off/pairing/on, a notification, a call, music
                  X<0|1|2>       a fake computer for the remote: gone, asks to pair, paired and back
                  g<gx>,<gy>,<gz> gyroscope, deg/s, device axes, held until changed
@@ -124,9 +122,6 @@ static void run_event(const char *ev)
     else if (ev[0] == 'H') shell_set_theme(atoi(ev + 1));
     else if (ev[0] == 'L' || ev[0] == 'N' || ev[0] == 'C' || ev[0] == 'M') fake_phone(ev[0], atoi(ev + 1)); /* the fake iPhone */
     else if (ev[0] == 'T') clock_jump += atof(ev + 1) * 3600;
-    else if (ev[0] == 'F') pip_action(PIP_ACT_FEED);
-    else if (ev[0] == 'G') pip_action(PIP_ACT_PLAY);
-    else if (ev[0] == 'R') pet_rare_now(pip_pet(), pip_find_mood(ev + 1));
     else if (ev[0] == 'K' && strchr(ev, '=')) {
         char name[32];
         snprintf(name, sizeof name, "%.*s", (int)(strchr(ev, '=') - ev - 1), ev + 1);
@@ -237,13 +232,12 @@ int main(int argc, char **argv)
     pip_info_t in;
     pip_get_info(&in);
     printf("%s: %d frames, UI work %.2f ms/frame on this Mac\n", out, frames + 1, busy * 1000 / (frames + 1));
-    printf("pet: hour=%d food=%.2f energy=%.2f fun=%.2f love=%.2f walk=%.2f day_mood=%.2f\n", in.hour, in.food, in.energy,
-           in.fun, in.love, in.walk, in.day_mood);
+    printf("pet: hour=%d\n", in.hour);
     pet_why_t why;
-    int base = pet_mood_why(pip_pet(), 0, &why);
-    printf("status: mood=%s reaction=%s steps=%d face_down=%d asleep=%d auto=%d screen=%s theme=%d phone=%s shots=%d base=%s why=%d.%d display=%d eco=%d mic=%d %s\n",
+    int base = pet_mood_why(pip_pet(), &why);
+    printf("status: mood=%s reaction=%s steps=%d face_down=%d asleep=%d auto=%d screen=%s theme=%d phone=%s shots=%d base=%s why=%d display=%d eco=%d mic=%d %s\n",
            in.mood, in.reaction, in.steps, in.face_down, in.asleep, in.auto_mood, shell_where(), theme_index(),
-           *fake_phone_last() ? fake_phone_last() : "-", fake_phone_shots(), pip_mood_name(base), why.kind, why.which, pip_display_on(), pip_eco_on(), pip_mic_wanted(),
+           *fake_phone_last() ? fake_phone_last() : "-", fake_phone_shots(), pip_mood_name(base), why.kind, pip_display_on(), pip_eco_on(), pip_mic_wanted(),
            fake_host_report());
     return pclose(ff) ? 1 : 0;
 }

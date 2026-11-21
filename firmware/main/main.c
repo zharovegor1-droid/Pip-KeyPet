@@ -438,8 +438,7 @@ static void sensors_task(void *arg)
             refr_worst = face_worst = 0;
             if (mic_on()) ESP_LOGI(TAG, "mic: %.0f dB, loudest %.0f dB in 5 s%s", mic_db(), mic_peak, mic_blowing() ? ", blowing" : "");
             mic_peak = 0;
-            ESP_LOGI(TAG, "pet: %02d h food=%.2f energy=%.2f fun=%.2f love=%.2f walk=%.2f day=%+.2f %s", in.hour, in.food,
-                     in.energy, in.fun, in.love, in.walk, in.day_mood, in.asleep ? "asleep" : "awake");
+            ESP_LOGI(TAG, "pet: %02d h %s", in.hour, in.asleep ? "asleep" : "awake");
         }
     }
 }

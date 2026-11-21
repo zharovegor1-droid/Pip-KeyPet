@@ -676,7 +676,7 @@ void shell_home(void)
     go(sh.pip_scr, LV_SCREEN_LOAD_ANIM_MOVE_BOTTOM, 250, app); /* an app screen is deleted after */
 }
 
-/* Top (PWR): Pip -> menu -> the app in the middle; apps may use it. Bottom (BOOT): "meet" on Pip,
+/* Top (PWR): Pip -> menu -> the app in the middle; apps may use it. Bottom (BOOT): free on Pip (the assistant's, later),
    back to Pip from the menu, back to the menu from an app unless the app uses it. */
 void shell_button(int id)
 {
@@ -687,7 +687,7 @@ void shell_button(int id)
     lv_obj_t *now = lv_screen_active();
     if (now == sh.pip_scr) {
         if (id == PIP_BTN_PWR) show_menu(LV_SCREEN_LOAD_ANIM_FADE_IN);
-        else pip_meet();
+        else pip_button(id);
     } else if (now == sh.menu_scr) {
         if (id == PIP_BTN_PWR) open_app(sh.style == MENU_HONEYCOMB ? hex_focus() : sh.style == MENU_LIST ? sh.lo + list_middle() : car_middle());
         else if (sh.group) group_leave(); /* out of the games first */

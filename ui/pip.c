@@ -158,9 +158,8 @@ static struct {
     int mood, shown;
     /* reaction: a mood shown for a while on top of the base mood */
     int react_mood;
-    float react_left, annoy, pet_total, pet_recent;
+    float react_left, pet_total, pet_recent;
     const char *react_name;
-    bool meet_pending;
     spring_t shape[2][SHAPE_N];
     spring_t open, squash, look_x, look_y, head_yaw, head_pitch, head_roll, dizzy;
     spring_t tint[3], blush, tremble, nod, wag;
@@ -175,12 +174,10 @@ static struct {
     float intro;       /* seconds into waking up after power-on; < 0: done */
     int bat_pct;
     int tz;
-    float stroke_t, shakes, last_voice, greet_t;
+    float shakes, last_voice;
     float dark_in;  /* > 0: the screen goes dark in this many seconds (lying face down) */
     bool dark;      /* the screen is off: nothing to draw */
     float room_db, mic_t, bang_wait, bang_db, last_bang; /* the room's level, and a bang waiting to be sure it is no breath */
-    float notes[8];                                      /* when the last notifications came */
-    int note_i;
     float sx, sy; /* where the finger went down */
     float glance_x, glance_y, glance_left; /* something on screen worth a look, e.g. a notification */
     void (*on_swipe)(int dir);
@@ -274,38 +271,21 @@ void pip_auto(bool on) { s.auto_mood = on; }
 void pip_time(int64_t now, int tz_min)
 {
     s.tz = tz_min;
-    if (s.pet.version != PET_VERSION) pet_init(&s.pet, now, tz_min, lv_rand(1, 0x7FFFFFFF));
-    if (FEAT(PIP_F_TIME)) pet_update(&s.pet, now, tz_min);
-    else s.pet.last = now; /* time stands still for him: nothing drops while filming */
-    bool bat = FEAT(PIP_F_BATTERY), charging = bat && s.bat_charging; /* what the mood tree reads of the battery */
-    if (charging && !s.pet.charging) s.pet.charge_since = s.pet.last;
-    s.pet.charging = charging, s.pet.bat = (int8_t)(bat ? s.bat_pct : -1);
-    if (s.auto_mood) s.mood = pet_settle(&s.pet, tz_min);
+    if (s.pet.version != PET_VERSION) pet_init(&s.pet, now, tz_min);
+    pet_update(&s.pet, now, tz_min);
+    bool bat = FEAT(PIP_F_BATTERY);
+    s.pet.charging = bat && s.bat_charging, s.pet.bat = (int8_t)(bat ? s.bat_pct : -1);
+    if (s.auto_mood) s.mood = pet_mood(&s.pet);
 }
 
-/* the battery is his dinner: plugged in he cheers up and eats, a little every reading, until the charger goes */
+/* plugged in he cheers up for a moment */
 void pip_shake_ok(bool ok) { s.no_shakes = !ok; }
 void pip_wake_up(void) { s.intro = 0, s.open.x = 0, s.open.v = 0; }
 
 void pip_battery(int pct, bool charging)
 {
     if (charging && !s.bat_charging && s.bat_pct >= 0 && FEAT(PIP_F_BATTERY)) react(PIP_HAPPY, 4.0f, "charging");
-    if (charging && FEAT(PIP_F_BATTERY)) s.pet.food = fminf(1, s.pet.food + 0.005f);
     s.bat_pct = pct, s.bat_charging = charging;
-}
-
-void pip_action(int act)
-{
-    int r = pet_event(&s.pet, act == PIP_ACT_FEED ? PET_FEED : PET_PLAY);
-    if (r >= 0)
-        react(r, 2.0f, act == PIP_ACT_PLAY ? (r == PIP_NO ? "worn out" : "play")
-                       : r == PIP_NAUSEOUS ? "too full" : r == PIP_DISGUSTED ? "enough" : "yum");
-}
-
-void pip_game(int result)
-{
-    static const struct { int ev; const char *name; } g[] = {{PET_WIN, "won"}, {PET_LOSE, "lost"}, {PET_RECORD, "record"}};
-    react(pet_event(&s.pet, g[result].ev), 2.5f, g[result].name);
 }
 
 void pip_phone(int what)
@@ -315,20 +295,9 @@ void pip_phone(int what)
     if (!s.pet.asleep) react(r[what].mood, 2.5f, r[what].name);
 }
 
-/* a pile of notifications at once dismays him; one by one they are just a glance */
 static void light_up(void);
 void pip_wake(void) { light_up(); } /* something to look at came: a notification, a call */
-
-void pip_note(void)
-{
-    light_up();
-    s.notes[s.note_i++ % 8] = s.t;
-    int n = 0;
-    for (int i = 0; i < 8; i++) n += s.notes[i] > 0 && s.t - s.notes[i] < pet_tune.flood_s;
-    if (n < pet_tune.flood_n || s.pet.asleep) return;
-    react(pet_event(&s.pet, PET_FLOOD), 3.0f, "flood");
-    memset(s.notes, 0, sizeof s.notes);
-}
+void pip_note(void) { light_up(); }
 
 /* lying face down the screen goes dark a second after he falls asleep; turned over, or a button, wakes it */
 #define DARK_AFTER_S 1.0f
@@ -357,12 +326,7 @@ static void light_up(void)
     s.dark_in = s.imu.face_down && FEAT(PIP_F_FACEDOWN) ? DARK_AGAIN_S : 0;
 }
 
-void pip_seen(void)
-{
-    light_up();
-    int r = pet_event(&s.pet, PET_SEEN); /* back after hours alone: glad, or sulking if he felt left */
-    if (r >= 0) react(r, 3.0f, r == PIP_HURT ? "sulks" : "glad you're back"), s.greet_t = 1.2f;
-}
+void pip_seen(void) { light_up(); }
 
 const void *pip_pet_state(size_t *size)
 {
@@ -378,37 +342,20 @@ bool pip_pet_restore(const void *data, size_t size)
     return true;
 }
 
-static void meet(void)
-{
-    react(PIP_CURIOUS, 1.4f, "meet");
-    s.meet_pending = true;
-}
-
 static void poke(void)
 {
     blink();
-    if (s.pet.asleep) { /* woken up: grumpy unless he has slept enough */
-        int r = pet_event(&s.pet, PET_WAKE);
-        react(r, 2.5f, "woken up");
+    if (s.pet.asleep) { /* woken up */
+        react(pet_event(&s.pet, PET_WAKE), 1.5f, "woken up");
         return;
     }
-    if (s.greet_t > 0) return; /* the touch that brought him back is not a poke */
-    pet_event(&s.pet, PET_POKE);
-    if ((s.annoy += 1) >= 2.5f) { /* about three pokes in a row; keep at it and he goes furious, red, swearing */
-        int r = pet_event(&s.pet, PET_FED_UP);
-        react(r, r == PIP_SWEARING ? 4.0f : 2.5f, "fed up");
-        s.annoy = 0;
-    } else {
-        react(PIP_OUCH, 0.45f, "poke");
-    }
+    react(PIP_OUCH, 0.45f, "poke");
 }
-
-void pip_meet(void) { meet(); }
 
 void pip_button(int id)
 {
-    if (id == PIP_BTN_PWR) meet();
-    else blink(); /* BOOT: free for now */
+    (void)id;
+    blink();
 }
 
 void pip_key(char k)
@@ -418,7 +365,6 @@ void pip_key(char k)
         if (k == keys[i]) { pip_set_mood(i); s.react_mood = -1; }
     if (k == ' ') { pip_set_mood(s.mood + 1); s.react_mood = -1; }
     if (k == 'b') blink();
-    if (k == 'm') meet();
 }
 
 void pip_imu(float ax, float ay, float az, float dt)
@@ -445,7 +391,6 @@ void pip_imu(float ax, float ay, float az, float dt)
     if ((ev & IMU_UPRIGHT) && s.react_mood >= 0 && !strcmp(s.react_name, "upside down")) s.react_left = 0;
     if ((ev & IMU_FALL) && !s.pet.asleep) { pet_event(&s.pet, PET_FRIGHT); react(PIP_SHOCKED, 2.0f, "dropped"); }
     if ((ev & IMU_SHAKE) && !s.imu.face_down && !s.no_shakes && FEAT(PIP_F_SHAKE)) {
-        pet_event(&s.pet, PET_SHAKE);
         if ((s.shakes += 1) >= 2.5f) { react(PIP_DULL, 40, "shaken silly"); s.shakes = 0; } /* about three in a row */
         else react(PIP_DIZZY, 3.0f, "dizzy");
     }
@@ -456,7 +401,6 @@ void pip_get_info(pip_info_t *o)
 {
     *o = (pip_info_t){moods[s.shown].name, s.react_mood >= 0 ? s.react_name : "", (int)s.pet.steps_today,
                       s.imu.tilt_x, s.imu.tilt_y, s.imu.energy, s.imu.face_down, s.frame_ms,
-                      s.pet.food, s.pet.energy, s.pet.fun, s.pet.love, s.pet.walk, s.pet.day_mood,
                       s.pet.asleep, s.auto_mood, pet_hour(s.pet.last, s.tz)};
 }
 
@@ -588,11 +532,9 @@ static void update(float dt)
 {
     power(dt);
     /* reactions */
-    s.annoy = fmaxf(0, s.annoy - dt * 0.4f);
     s.shakes = fmaxf(0, s.shakes - dt / 20); /* three shakes within about a minute */
     if (s.petting && s.touching && (s.pet_recent -= dt) > 0) {
         s.pet_total += dt;
-        if ((s.stroke_t += dt) > 0.5f) { s.stroke_t = 0; pet_event(&s.pet, PET_STROKE); }
         if (s.pet_total > 2.5f) react(PIP_LOVE, 2.5f, "love");
         else if (s.react_mood != PIP_LOVE) react(PIP_HAPPY, 1.0f, "pet");
         if (s.react_mood == PIP_HAPPY && !voice_busy()) say(VOICE_PURR); /* keeps purring while stroked */
@@ -617,18 +559,8 @@ static void update(float dt)
             s.bang_wait = 0.45f, s.bang_db = db, s.last_bang = s.t;
         s.room_db += (db - s.room_db) * (1 - expf(-dt / 4)); /* a loud room becomes the room */
     }
-    s.greet_t -= dt;
     if (s.dark_in > 0 && (s.dark_in -= dt) <= 0) s.dark = true;
-    if (s.react_mood >= 0 && (s.react_left -= dt) <= 0) {
-        s.react_mood = -1;
-        if (s.meet_pending) {
-            s.meet_pending = false;
-            static const char *const said[PIP_MOOD_COUNT] = {[PIP_LOVE] = "likes you", [PIP_SHY] = "shy", [PIP_SUSPICIOUS] = "wary",
-                                                             [PIP_ANGRY] = "dislikes you", [PIP_BELLIGERENT] = "dislikes you"};
-            int r = pet_meet(&s.pet, (int)lv_rand(0, 99));
-            react(r, 3.0f, said[r]);
-        }
-    }
+    if (s.react_mood >= 0 && (s.react_left -= dt) <= 0) s.react_mood = -1;
     int mood = s.react_mood >= 0 ? s.react_mood : s.mood;
     if (mood != s.shown) {
         /* his own mood swings get a comment now and then, not every time */
@@ -882,12 +814,12 @@ static void dev_paint(uint16_t *px, const face_rect_t *clip)
 
 static void dev_text(void)
 {
-    static const char *const why[] = {"сон", "карточка дня", "тело", "послевкусие", "нужда", "ночь", "занят", "палитра"};
+    static const char *const why[] = {"сон", "испуг", "спокоен"};
     pet_why_t w;
-    pet_mood_why(&s.pet, s.tz, &w);
+    pet_mood_why(&s.pet, &w);
     char t[160], b[200];
     snprintf(t, sizeof t, "DEV MODE\n%.0f к/с  кадр %.0f мс\n%s%s%s  <- %s", dev.fps, s.frame_ms, moods[s.shown].name,
-             s.react_mood >= 0 ? " / " : "", s.react_mood >= 0 ? s.react_name : "", w.kind >= 0 && w.kind < 8 ? why[w.kind] : "?");
+             s.react_mood >= 0 ? " / " : "", s.react_mood >= 0 ? s.react_name : "", w.kind >= 0 && w.kind < 3 ? why[w.kind] : "?");
     snprintf(b, sizeof b, "наклон %+.1f %+.1f\nтряска %.1f  мик %.0f дБ  бат %d%%%s%s", s.imu.tilt_x, s.imu.tilt_y, s.imu.energy,
              mic_on() ? mic_db() : 0.0f, s.bat_pct, dev.note[0] ? "\n" : "", dev.note);
     lv_label_set_text(dev.top, t);

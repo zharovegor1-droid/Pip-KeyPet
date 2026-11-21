@@ -111,12 +111,9 @@
   <div class="note">Приложение «Пульт»: кнопки листают слайды (Page Down / Page Up), зажатая нижняя + наклон — скролл, палец на экране + поворот брелока — указка. «Музыка» с подключённым компьютером управляет его медиа. С зажатым Shift нажмите на экран и тяните: палец остаётся на месте, а брелок поворачивается (указка). Так же с нижней кнопкой — скролл.</div>
   <div class="note">Так будет вести себя настоящий iPhone по Bluetooth: уведомления и звонки (ANCS), музыка (AMS), затвор камеры (клавиша «громкость +»). Приложение на телефоне не нужно.</div>
 
-  <h2>Тамагочи</h2>
-  <div id="needs"></div>
+  <h2>Пип</h2>
   <div class="mono" id="petinfo"></div>
   <div class="grid" style="margin-top:8px">
-    <button id="feed">Покормить</button>
-    <button id="play">Поиграть</button>
     <button id="auto" class="on">Авто-настроение</button>
   </div>
   <div class="grid" style="margin-top:6px" id="speeds">
@@ -456,11 +453,6 @@ setInterval(() => { /* what the keychain asked the phone to do */
 const SCREENS = { pair: 'сопряжение', call: 'звонок', banner: 'уведомление', style: 'стиль', pip: 'Пип', menu: 'меню', stopwatch: 'секундомер', badge: 'бейдж', clock: 'часы', care: 'Пип: забота', qr: 'Quick QR', timer: 'таймер',
   torch: 'фонарик', ball: 'шарик', notify: 'уведомления', music: 'музыка', camera: 'камера', remote: 'пульт', maze: 'лабиринт',
   games: 'игры', xo: 'крестики-нолики', eight: 'шар-восьмёрка', coin: 'монетка', dice: 'кубик', noise: 'шумомер' };
-const NEEDS = [['food', 'Еда'], ['energy', 'Энергия'], ['fun', 'Веселье'], ['love', 'Внимание'], ['walk', 'Прогулки'], ['dayMood', 'Настроение дня']];
-const needsEl = document.getElementById('needs');
-needsEl.innerHTML = NEEDS.map(([k, t]) => `<div class="need"><span>${t}</span><div class="bar" id="bar-${k}"><i></i></div><span class="val" id="val-${k}"></span></div>`).join('');
-document.getElementById('feed').onclick = () => M._sim_action(0);
-document.getElementById('play').onclick = () => M._sim_action(1);
 const autoBtn = document.getElementById('auto');
 autoBtn.onclick = () => M._sim_auto(1);
 for (const b of document.querySelectorAll('#speeds [data-speed]')) b.onclick = () => {
@@ -576,12 +568,6 @@ function tick(now) {
     const on = M._sim_get_volume() > 0;
     muteBtn.classList.toggle('on', on);
     muteBtn.textContent = on ? 'Звук включён' : 'Звук выключен';
-    for (const [k] of NEEDS) {
-      const v = st[k], frac = k === 'dayMood' ? (v + 1) / 2 : v;
-      document.querySelector(`#bar-${k} > i`).style.width = (frac * 100).toFixed(1) + '%';
-      document.getElementById('bar-' + k).classList.toggle('low', frac < 0.25);
-      document.getElementById('val-' + k).textContent = k === 'dayMood' ? (v >= 0 ? '+' : '') + v.toFixed(2) : Math.round(v * 100) + '%';
-    }
     const clock = new Date(simNow() * 1000).toLocaleString('ru-RU', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
     document.getElementById('petinfo').textContent =
       `время Пипа  ${clock}${timeSpeed > 1 ? '  (×' + timeSpeed + ')' : ''}\n` +

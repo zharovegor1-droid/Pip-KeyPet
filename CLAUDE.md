@@ -61,19 +61,18 @@ in the `storage` partition at 64 KB) — the panel's dev tab saves it as CSV, fo
 ## Architecture worth knowing before editing
 
 **Pip** (`ui/pip.c`): moods are a table of eye shapes + behaviour (`moods[]`); every frame springs chase the
-target shape, `face.c` rasterizes the two eyes. Base mood comes from `pet.c` (`pet_mood_why`, first match wins:
-asleep → a rare card (stoned/pinkeye, ~once a month) → the body (battery) → an aftertaste of an event (won, lost,
-fright, notification flood, sulking…) → a need under its line (near-equal needs take turns, a long spell shows the
-urge's other face) → tired night → a situation (just woke, walking, charging) → the day's palette by valence, calmer
-in the evening, weighted, never the same twice running). `pet_settle()` remembers what it showed (palette hysteresis,
-how long an urge has held). Every threshold is a knob in `pet_tune`, named in `pet_knobs[]` (debug `set`, pipsim
-`K<name>=<v>`). Reactions (`react()`) override it for seconds. Touch, IMU (`imu.c`: tilt, shake, face-down, upside
+target shape, `face.c` rasterizes the two eyes. **This fork cuts the tamagotchi out**: `pet.c` keeps only being put to
+bed face down, steps by day, a fright's aftertaste and the clock; the base mood (`pet_mood_why`) is asleep → afraid
+(after a bang or a drop) → neutral. No needs, day mood, sulking, meeting, rare cards, fed-up ladder or notification
+flood. Knobs left in `pet_knobs[]`: loud_db, loud_jump, shock_db, after_fright (debug `set`, pipsim `K<name>=<v>`).
+Reactions (`react()`) override the base mood for seconds. Touch, IMU (`imu.c`: tilt, shake, face-down, upside
 down, free fall, steps), mic (`mic.c`: dB, blowing; a bang in `pip.c`), battery, the phone (`pip_phone`, `pip_note`),
 games (`pip_game`), `pip_seen()` and `pip_wake_up()` (power-on intro) feed it. `pip_feature()` switches inputs off.
 Left alone for `pip_power()` seconds (default 30; touch, buttons, lifting him, notifications count) the screen dims, then sleeps; apps with `.awake` hold it on. Face down for 1 s the screen sleeps (`pip_display_on()`: main.c turns the panel off, pip.c stops drawing, pipsim
 renders black and prints `display=0`); turning it over or any button wakes it (that press does nothing else).
 
-**Shell** (`ui/shell.c`): Pip ⇄ menu ⇄ apps, side buttons (top = open, bottom = back/meet). `apps[]` in
+**Shell** (`ui/shell.c`): Pip ⇄ menu ⇄ apps, side buttons (top = open, bottom = back; on Pip the bottom one is
+kept free for the assistant's push-to-talk: the top key is the PMU's and never reports its release). `apps[]` in
 `ui/apps.c`: the first `app_count` are the menu; apps with `.group` (the games) follow and are shown by the
 list menu when their owner row ("games") is opened. An app gets `.imu` (accelerometer, g) and `.gyro` (deg/s,
 QMI8658 on the board, event `g` in pipsim) while it is open. The maze's physics is plain C in `ui/maze.c`

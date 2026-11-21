@@ -1,6 +1,6 @@
 file(GLOB THEME_FONTS ${CMAKE_CURRENT_LIST_DIR}/../../ui/fonts/font_*_*.c)
 idf_component_register(SRCS main.c ble.c debug.c ../../ui/face.c ../../ui/imu.c ../../ui/pip.c ../../ui/doodle.c ../../ui/pet.c ../../ui/shell.c ../../ui/apps.c ../../ui/voice.c ../../ui/profile.c
-                            ../../ui/theme.c ../../ui/phone.c ../../ui/mic.c ../../ui/maze.c ${THEME_FONTS}
+                            ../../ui/theme.c ../../ui/phone.c ../../ui/mic.c ${THEME_FONTS}
                        INCLUDE_DIRS ../../ui)
 # the face renderer: its per-pixel loop in IRAM (FACE_HOT); no errno from the little libm it still calls
 set_source_files_properties(../../ui/face.c PROPERTIES COMPILE_OPTIONS "-fno-math-errno;-O2"
