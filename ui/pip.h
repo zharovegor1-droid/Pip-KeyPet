@@ -56,7 +56,7 @@ void pip_get_info(pip_info_t *out);
 const char *pip_mood_name(int mood);
 void pip_react(int mood, float secs, const char *name); /* show a mood for a while, e.g. when the timer rings */
 void pip_glance(float x, float y, float secs);         /* look at a screen point for a while (0 secs: stop) */
-void pip_on_swipe(void (*cb)(int dir));                  /* a quick horizontal flick on the face: dir -1 left, +1 right */
+void pip_on_swipe(void (*cb)(int dir));                  /* a quick flick on the face: dir -1 left, +1 right, 2 down from the top */
 int pip_find_mood(const char *name); /* -1 if unknown */
 /* the slowest frame of the last secs seconds (ms, 0: none drawn), and what he showed then (mood, reaction or "") */
 float pip_frame_worst(int secs, const char **mood, const char **reaction);

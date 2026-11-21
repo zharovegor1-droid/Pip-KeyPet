@@ -21,7 +21,7 @@
 #define LENS_H 56
 
 static struct {
-    lv_obj_t *pip_scr, *menu_scr, *app_scr, *name;
+    lv_obj_t *pip_scr, *menu_scr, *app_scr, *name, *dot;
     lv_obj_t *icons[24], *rows[24], *marker;
     lv_obj_t *bat, *bat_fill; /* the battery at the top of the menu */
     bool updating;            /* shell_updating(): the screen stays lit until the reset */
@@ -676,7 +676,14 @@ void shell_home(void)
     go(sh.pip_scr, LV_SCREEN_LOAD_ANIM_MOVE_BOTTOM, 250, app); /* an app screen is deleted after */
 }
 
-/* Top (PWR): Pip -> menu -> the app in the middle; apps may use it. Bottom (BOOT): free on Pip (the assistant's, later),
+static void dot_tick(lv_timer_t *t)
+{
+    (void)t;
+    bool on = phone_fresh() && pip_display_on();
+    if (on == lv_obj_has_flag(sh.dot, LV_OBJ_FLAG_HIDDEN)) lv_obj_set_flag(sh.dot, LV_OBJ_FLAG_HIDDEN, !on);
+}
+
+/* Top (PWR): Pip -> the notifications if the red dot is lit, else the menu -> the app in the middle; apps may use it. Bottom (BOOT): free on Pip (the assistant's, later),
    back to Pip from the menu, back to the menu from an app unless the app uses it. */
 void shell_button(int id)
 {
@@ -686,7 +693,8 @@ void shell_button(int id)
     if (phone_button(id)) return; /* a call, the pairing or a banner answers first */
     lv_obj_t *now = lv_screen_active();
     if (now == sh.pip_scr) {
-        if (id == PIP_BTN_PWR) show_menu(LV_SCREEN_LOAD_ANIM_FADE_IN);
+        if (id == PIP_BTN_PWR && phone_fresh()) shell_open("notify");
+        else if (id == PIP_BTN_PWR) show_menu(LV_SCREEN_LOAD_ANIM_FADE_IN);
         else pip_button(id);
     } else if (now == sh.menu_scr) {
         if (id == PIP_BTN_PWR) open_app(sh.style == MENU_HONEYCOMB ? hex_focus() : sh.style == MENU_LIST ? sh.lo + list_middle() : car_middle());
@@ -699,6 +707,7 @@ void shell_button(int id)
 
 static void from_pip(int dir)
 {
+    if (dir == 2) { shell_open("notify"); return; } /* pulled down from the top, like the watch */
     show_menu(sh.style == MENU_HONEYCOMB ? LV_SCREEN_LOAD_ANIM_FADE_IN
               : dir < 0                  ? LV_SCREEN_LOAD_ANIM_MOVE_LEFT
                                          : LV_SCREEN_LOAD_ANIM_MOVE_RIGHT);
@@ -736,6 +745,17 @@ void shell_create(void)
     sh.pip_scr = lv_screen_active();
     pip_create(sh.pip_scr);
     pip_on_swipe(from_pip);
+    /* new notifications: a red dot at the top of his face, like the watch's; the top button opens them */
+    sh.dot = lv_obj_create(sh.pip_scr);
+    lv_obj_remove_style_all(sh.dot);
+    lv_obj_set_size(sh.dot, 16, 16);
+    lv_obj_set_pos(sh.dot, SCR / 2 - 8, 26);
+    lv_obj_set_style_radius(sh.dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(sh.dot, lv_color_hex(0xFF3B30), 0);
+    lv_obj_set_style_bg_opa(sh.dot, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(sh.dot, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(sh.dot, LV_OBJ_FLAG_HIDDEN);
+    lv_timer_create(dot_tick, 200, NULL);
 
     sh.menu_scr = lv_obj_create(NULL);
     lv_obj_remove_flag(sh.menu_scr, LV_OBJ_FLAG_SCROLLABLE);

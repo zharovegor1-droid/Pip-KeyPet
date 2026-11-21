@@ -188,10 +188,19 @@ ok &= check("list menu: a flick coasts several rows and lands on one", st["scree
 app_ids = ["notify", "music", "remote", "clock", "timer", "stopwatch", "torch", "noise", "camera", "bt", "settings"]
 _, st = run("0.3:osettings 0.6:d233,122 0.65:u 1.0:d233,338 1.05:u", 1.4)
 ok &= check("settings: a tap switches the sound off, another switches energy saving on", st["screen"] == "settings" and st["eco"] == "1", st)
-_, st = run("0.1:L2 0.4:N", 0.9)
-ok &= check("a notification shows a banner (its text hidden by default)", st["screen"] == "banner", st)
-_, st = run("0.1:L2 0.3:onotify 0.6:d233,86 0.65:u 0.9:B 1.3:N", 1.7)
-ok &= check("privacy off: no banner, nothing kept", st["screen"] != "banner", st)
+dot = lambda img: img.getpixel((233, 34)) > 150  # the red dot over Pip (brightness = its red channel)
+img, st = run("0.1:L2 0.4:N", 0.9)
+ok &= check("a notification: no banner, the red dot lights over Pip", st["screen"] == "pip" and dot(img), st)
+img, st = run("0.1:L2", 0.9)
+ok &= check("no notification: no red dot", not dot(img), st)
+_, st = run("0.1:L2 0.4:N 0.8:P", 1.4)
+ok &= check("red dot lit: the top button opens the notifications, not the menu", st["screen"] == "notify", st)
+img, st = run("0.1:L2 0.4:N 0.8:P 1.3:B 1.8:B", 2.4)
+ok &= check("opened once: back on Pip the dot is gone and the top button means the menu again", st["screen"] == "pip" and not dot(img), st)
+_, st = run("0.1:L2 0.4:N 0.8:d233,90 0.85:m233,170 0.9:m233,260 0.95:u", 1.4)
+ok &= check("pulled down from the top of the face -> the notifications", st["screen"] == "notify", st)
+img, st = run("0.1:L2 0.3:onotify 0.6:d233,86 0.65:u 0.9:B 1.3:B 1.6:N", 2.0)
+ok &= check("privacy off: nothing kept, no red dot", st["screen"] == "pip" and not dot(img), st)
 _, st = run("0.05:H1", 33)
 ok &= check("left alone 30 s: the screen sleeps", st["display"] == "0", st)
 _, st = run("0.05:H1 34:d233,233 34.1:u", 36)
@@ -219,17 +228,15 @@ ok &= check("stopwatch at zero: bottom button leaves -> menu", st["screen"] == "
 _, st = run("0.1:H3 0.2:otimer 0.4:d243,40 0.45:m240,40 0.5:u 0.8:P", 63.5)
 ok &= check("Диагностика timer: ring set to 1 min, top button starts, it rings", st["screen"] == "pip" and st["reaction"] == "time's", st)
 
-# the iPhone (a fake one): pairing, the banner, calls, music and the camera send the right commands back
+# the iPhone (a fake one): pairing, notifications, calls, music and the camera send the right commands back
 _, st = run("0.1:H3 0.2:L1", 0.6)
 ok &= check("phone: pairing shows the code on top", st["screen"] == "pair", st)
 _, st = run("0.1:H3 0.2:L1 0.5:P", 0.9)
 ok &= check("phone: top button confirms the code -> pair_ok, back to Pip", st["phone"] == "pair_ok" and st["screen"] == "pip", st)
 _, st = run("0.1:H3 0.2:L2 0.4:N", 0.8)
-ok &= check("phone: a notification drops a banner over Pip", st["screen"] == "banner", st)
-_, st = run("0.1:H3 0.2:L2 0.4:N", 7.0)
-ok &= check("phone: the banner goes by itself after 6 s", st["screen"] == "pip", st)
-_, st = run("0.1:H3 0.2:L2 0.4:N 0.8:P 1.3:P", 1.7)
-ok &= check("phone: banner -> top opens it -> top again marks it read on the phone", st["phone"] == "note_dismiss" and st["screen"] == "notify", st)
+ok &= check("phone: a notification leaves Pip on screen (no banner)", st["screen"] == "pip", st)
+_, st = run("0.1:H3 0.2:L2 0.4:N 0.8:P 1.3:P 1.8:P", 2.2)
+ok &= check("phone: red dot -> top opens the list -> top opens it -> top marks it read on the phone", st["phone"] == "note_dismiss" and st["screen"] == "notify", st)
 _, st = run("0.1:H3 0.2:L2 0.4:N 0.5:N 0.6:N 0.8:onotify 1.2:B", 1.6)
 ok &= check("phone: the notification list leaves with the bottom button", st["screen"] == "menu", st)
 _, st = run("0.1:H3 0.2:L2 0.4:C1", 0.8)
@@ -318,8 +325,8 @@ for t in (0, 2):
     for a in ("notify", "music", "camera"):
         img, st = run(f"0.1:H{t} 0.15:L2 0.25:M1 0.3:o{a} 0.5:N", 0.9, "th")  # in the list app a new one lands in the list
         lit = sum(1 for y in range(0, 466, 6) for x in range(0, 466, 6) if abs(img.getpixel((x, y)) - img.getpixel((233, 8))) > 40)
-        if st["screen"] != (a if a == "notify" else "banner") or lit < 20: bad.append((a, st["screen"], lit))
-    ok &= check(f"theme {t}: the phone apps draw with a phone connected (banners over the others)", not bad, bad)
+        if st["screen"] != a or lit < 20: bad.append((a, st["screen"], lit))
+    ok &= check(f"theme {t}: the phone apps draw with a phone connected (a notification does not cover them)", not bad, bad)
 
 # voice: the synth itself, and Pip speaking through the real paths
 r = subprocess.run([os.path.join(os.path.dirname(sim), "voice_test")], capture_output=True, text=True)

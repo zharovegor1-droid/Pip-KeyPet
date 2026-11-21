@@ -24,7 +24,7 @@ enum {
 
 /* ---------- host -> UI ---------- */
 void phone_link(int state, uint32_t code);                                     /* PHONE_PAIRING: show the 6-digit code */
-void phone_note(uint32_t uid, const char *app, const char *title, const char *text, int hour, int min, bool quiet); /* quiet: no banner */
+void phone_note(uint32_t uid, const char *app, const char *title, const char *text, int hour, int min, bool quiet); /* quiet: no red dot */
 void phone_note_gone(uint32_t uid);
 void phone_call(uint32_t uid, const char *name, const char *kind);             /* name NULL: the call is over */
 void phone_track(const char *title, const char *artist, int dur_s, float pos_s, bool playing); /* title NULL: nothing */
@@ -35,8 +35,9 @@ void phone_on_command(void (*cb)(int cmd, uint32_t uid));
 const char *phone_command_name(int cmd);
 
 /* ---------- for the shell and the app list ---------- */
-bool phone_button(int id);      /* the pairing, call and banner overlays take the side buttons first */
-const char *phone_where(void);  /* "pair", "call" or "banner" while one is up, else NULL */
+bool phone_button(int id);      /* the pairing and call overlays take the side buttons first */
+const char *phone_where(void);  /* "pair" or "call" while one is up, else NULL */
+bool phone_fresh(void);         /* new notifications since the list was last opened: the red dot over Pip */
 void phone_notify_open(lv_obj_t *scr);
 void phone_notify_close(void);
 bool phone_notify_button(int id);

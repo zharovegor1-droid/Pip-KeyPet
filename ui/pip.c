@@ -952,7 +952,9 @@ static void touch_cb(lv_event_t *e)
         uint32_t ms = lv_tick_elaps(s.press_tick);
         /* a quick one-way flick is a swipe to the apps; slow back-and-forth strokes stay petting */
         bool swipe = ms < 450 && fabsf(dx) > 110 && fabsf(dy) < fabsf(dx) * 0.6f && s.path < fabsf(dx) * 1.4f;
+        bool pull = ms < 450 && dy > 110 && fabsf(dx) < dy * 0.6f && s.sy < 160 && s.path < dy * 1.4f; /* down from the top */
         if (code == LV_EVENT_RELEASED && swipe && s.on_swipe) s.on_swipe(dx < 0 ? -1 : 1);
+        else if (code == LV_EVENT_RELEASED && pull && s.on_swipe) s.on_swipe(2);
         else if (code == LV_EVENT_RELEASED && ms < TAP_MS && s.path < 25) poke();
     }
 }

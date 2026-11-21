@@ -32,10 +32,9 @@ static struct {
     float vol, vol_phone; /* vol: shown; vol_phone: what the phone last said */
     void (*cb)(int cmd, uint32_t uid);
     /* overlays on the top layer */
-    lv_obj_t *banner, *call_o, *pair_o, *call_grid, *call_arc;
-    lv_timer_t *banner_t, *call_t;
+    lv_obj_t *call_o, *pair_o, *call_grid, *call_arc;
+    lv_timer_t *call_t;
     th_cell_t call_cells[60];
-    uint32_t banner_uid, open_uid;
     int call_phase;
     const char *app; /* the phone app on screen, NULL if none */
     int host;        /* HOST_*: a computer, for the remote */
@@ -191,27 +190,10 @@ void phone_link(int state, uint32_t code)
     if (was != state) reopen_app();
 }
 
-/* ================= the banner over whatever is on screen ================= */
+/* ================= no banners: a new notification lights the red dot over Pip (shell.c) ================= */
 
-static void banner_hide(void)
-{
-    if (ph.banner_t) lv_timer_delete(ph.banner_t), ph.banner_t = NULL;
-    if (ph.banner) {
-        if (lv_obj_get_user_data(ph.banner)) lv_obj_delete(lv_obj_get_user_data(ph.banner)); /* its hints */
-        lv_obj_delete(ph.banner), ph.banner = NULL, pip_glance(0, 0, 0);
-    }
-}
-
-static void banner_open(void)
-{
-    ph.open_uid = ph.banner_uid;
-    banner_hide();
-    shell_open("notify");
-}
-
-static void banner_tap(lv_event_t *e) { (void)e; banner_open(); }
-static void banner_timeout(lv_timer_t *t) { (void)t; ph.banner_t = NULL; banner_hide(); }
-static void height_exec(void *o, int32_t v) { lv_obj_set_height(o, v); }
+static bool fresh; /* something came since the list was last looked at */
+bool phone_fresh(void) { return fresh && ph.n > 0; }
 
 /* ---------- privacy ---------- */
 static int privacy = PHONE_PRIV_HIDE;
@@ -251,46 +233,6 @@ static bool sensitive(const char *app, const char *title, const char *text)
 
 /* the sender and the line under it, as a glance may show them */
 static const char *glance_title(const note_t *n) { return privacy == PHONE_PRIV_OPEN && !n->secret ? n->title : "новое уведомление"; }
-static const char *glance_text(const note_t *n) { return privacy == PHONE_PRIV_OPEN && !n->secret ? n->text : ""; }
-
-static void banner_show(const note_t *n)
-{
-    banner_hide();
-    ph.banner_uid = n->uid;
-    lv_obj_t *b = ph.banner = th_box(lv_layer_top(), 93, 52, 280, 100, TH_TERMINAL ? 0 : 16, TH_TERMINAL ? th->bg : th->panel);
-    if (TH_TERMINAL) lv_obj_set_style_border_width(b, 2, 0), lv_obj_set_style_border_color(b, lv_color_hex(th->text), 0);
-    lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(b, banner_tap, LV_EVENT_CLICKED, NULL);
-    th_box(b, 12, 12, 9, 9, TH_TERMINAL ? 0 : LV_RADIUS_CIRCLE, TH_TERMINAL ? th->text : th->accent); /* unread */
-    char t[64];
-    snprintf(t, sizeof t, "%s // сейчас", n->app);
-    lv_obj_t *l = th_text_at(b, th->tiny_bold, th->dim, t, 29, 6);
-    lv_obj_set_width(l, 240), lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
-    l = th_text_at(b, th->button ? th->button : th->small, th->text, glance_title(n), 12, 30);
-    lv_obj_set_width(l, 254), lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
-    l = th_text_at(b, th->tiny, th->dim, glance_text(n), 12, 60);
-    lv_obj_set_width(l, 254), lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
-    lv_obj_set_height(l, lv_font_get_line_height(th->tiny));
-    /* drops in like a scan, top down */
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, b);
-    lv_anim_set_exec_cb(&a, height_exec);
-    lv_anim_set_values(&a, 0, 100);
-    lv_anim_set_duration(&a, 180);
-    lv_anim_start(&a);
-    ph.banner_t = lv_timer_create(banner_timeout, 6000, NULL);
-    lv_timer_set_repeat_count(ph.banner_t, 1);
-    lv_obj_t *hints = footer(b, TH_UP " открыть   " TH_DOWN " скрыть", 0);
-    if (hints) { /* on the top layer, below the banner's own clip */
-        lv_obj_set_parent(hints, lv_layer_top());
-        lv_obj_align(hints, LV_ALIGN_TOP_MID, 0, 404);
-        lv_obj_set_user_data(b, hints);
-    }
-    pip_glance(SCR / 2, 330, 6); /* Pip lowers his eyes and makes room */
-    voice_say(VOICE_HM);
-}
-
 /* ================= incoming call ================= */
 
 static void call_hide(void)
@@ -325,7 +267,6 @@ static void call_show(void)
 {
     pip_wake();
     call_hide();
-    banner_hide();
     lv_obj_t *o = ph.call_o = layer();
     ph.call_arc = NULL;
     if (TH_TERMINAL) th_ring(ph.call_cells, 60, 210, 8), ph.call_grid = th_cells(o, ph.call_cells, 60);
@@ -361,12 +302,11 @@ bool phone_button(int id)
     bool top = id == PIP_BTN_PWR;
     if (ph.pair_o) pair_answer(top);
     else if (ph.call_o) call_answer(top);
-    else if (ph.banner) top ? banner_open() : banner_hide();
     else return false;
     return true;
 }
 
-const char *phone_where(void) { return ph.pair_o ? "pair" : ph.call_o ? "call" : ph.banner ? "banner" : NULL; }
+const char *phone_where(void) { return ph.pair_o ? "pair" : ph.call_o ? "call" : NULL; }
 
 /* ================= no phone yet: what the apps show ================= */
 
@@ -615,13 +555,10 @@ static void nt_input(lv_event_t *e)
 void phone_notify_open(lv_obj_t *scr)
 {
     ph.app = "notify";
-    banner_hide(); /* it is all here now */
+    fresh = false; /* looked at: the red dot goes */
     nt.scr = scr;
     nt.detail = false;
     nt.focus = 0;
-    int i = ph.open_uid ? note_find(ph.open_uid) : -1; /* came from the banner: straight to that one */
-    if (i >= 0) nt.detail = true, nt.detail_uid = ph.open_uid, nt.focus = i;
-    ph.open_uid = 0;
     lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(scr, nt_input, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(scr, nt_input, LV_EVENT_PRESSING, NULL);
@@ -651,7 +588,7 @@ bool phone_notify_button(int id)
 void phone_set_privacy(int mode)
 {
     privacy = mode >= 0 && mode < PHONE_PRIV_COUNT ? mode : PHONE_PRIV_HIDE;
-    if (privacy == PHONE_PRIV_OFF) ph.n = 0, banner_hide(); /* off: forget what was here too */
+    if (privacy == PHONE_PRIV_OFF) ph.n = 0, fresh = false; /* off: forget what was here too */
     if (nt.scr) nt.detail = false, nt_build();
 }
 
@@ -665,7 +602,10 @@ void phone_note(uint32_t uid, const char *app, const char *title, const char *te
         if (ph.n < MAX_NOTES) ph.n++;
         i = 0;
         if (nt.scr && !nt.detail) nt.focus = nt.focus + 1 < ph.n ? nt.focus + 1 : nt.focus; /* keep the same one in focus */
-        if (!quiet) pip_note();
+        if (!quiet) {
+            pip_note();
+            if (!nt.scr) fresh = true, pip_glance(SCR / 2, 40, 1.5); /* Pip glances up at the red dot */
+        }
     }
     note_t *n = &ph.notes[i];
     n->uid = uid, n->hour = (uint8_t)hour, n->min = (uint8_t)min, n->unread = true;
@@ -674,8 +614,7 @@ void phone_note(uint32_t uid, const char *app, const char *title, const char *te
     copy(n->title, sizeof n->title, n->secret ? "" : title); /* a code or a bank is not even kept */
     copy(n->text, sizeof n->text, n->secret ? "" : text);
     drawable_only(n->app), drawable_only(n->title), drawable_only(n->text);
-    if (nt.scr) { if (!nt.detail) nt_build(); }
-    else if (!quiet && !ph.call_o && !ph.pair_o) banner_show(n);
+    if (nt.scr && !nt.detail) nt_build();
 }
 
 void phone_note_gone(uint32_t uid)
@@ -684,7 +623,6 @@ void phone_note_gone(uint32_t uid)
     if (i < 0) return;
     memmove(&ph.notes[i], &ph.notes[i + 1], sizeof ph.notes[0] * (size_t)(ph.n - i - 1));
     ph.n--;
-    if (ph.banner && ph.banner_uid == uid) banner_hide();
     if (nt.scr) {
         if (nt.detail && nt.detail_uid == uid) nt.detail = false;
         if (nt.focus >= ph.n) nt.focus = ph.n ? ph.n - 1 : 0;
