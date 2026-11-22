@@ -1000,8 +1000,8 @@ static void br_subscribe(uint16_t conn, uint16_t handle, bool on);
 static int br_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return 0;
-    if (conn != b.conn) return BLE_ATT_ERR_INSUFFICIENT_AUTHOR; /* the phone's link only */
-    if (br_conn != conn) br_subscribe(conn, br_tx, true); /* it wrote before we knew the link was the phone's */
+    /* any bonded, encrypted link (WRITE_ENC): which of our roles iOS's link landed in does not matter to the app */
+    if (br_conn != conn) br_subscribe(conn, br_tx, true); /* it wrote before it subscribed, or from another link */
     static char line[320];
     static int len;
     uint8_t d[256];
@@ -1016,8 +1016,10 @@ static int br_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *
 
 static void br_subscribe(uint16_t conn, uint16_t handle, bool on) /* GAP: someone switched our notifications */
 {
-    if (handle != br_tx || conn != b.conn) return;
+    if (handle != br_tx) return;
+    if (!on && conn != br_conn) return; /* someone else unsubscribing */
     if (on == (br_conn == conn)) return;
+    ESP_LOGI(TAG, "bridge on link %d (phone %d, computer %d)", conn, b.conn, host_conn);
     br_conn = on ? conn : BLE_HS_CONN_HANDLE_NONE;
     ESP_LOGI(TAG, "bridge app %s", on ? "here" : "gone");
     ui(on ? ui_ask_on : ui_ask_off, NULL);
