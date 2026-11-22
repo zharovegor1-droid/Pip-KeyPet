@@ -16,12 +16,17 @@
 #define CONTEXT_MAX 2500   /* what of a long chat goes to Claude */
 #define MAGIC 0x31484350u  /* "PCH1" */
 
-/* the chat page: one column that scrolls, inside the round glass */
+/* the chat page: the column scrolls through the whole circle; each bubble hugs the glass where it is now (chat_fit) */
+#define CHAT_Y0 76       /* the column's window: under the header ... */
+#define CHAT_Y1 388      /* ... and above the hint; what scrolls out of it is cut off */
+#define COL_L 58         /* the column's edges in the middle of the screen */
+#define COL_R 408
+#define EDGE 16          /* kept off the glass's edge */
 #define BOX_X 83
 #define BOX_Y 76
 #define BOX_W 300
 #define BOX_H 308
-#define BUBBLE_W 250
+#define BUBBLE_W 270
 #define PAD_X 12
 #define PAD_Y 8
 #define GAP 8
@@ -243,7 +248,8 @@ static int bubble(int y, bool mine, const char *text, uint32_t fg, uint32_t bg)
     lv_obj_t *b = lv_obj_create(a.box);
     lv_obj_remove_style_all(b);
     lv_obj_set_size(b, w, h);
-    lv_obj_set_pos(b, mine ? BOX_W - w : 0, y);
+    lv_obj_set_pos(b, mine ? COL_R - w : COL_L, y); /* chat_fit moves it in to the glass */
+    lv_obj_set_user_data(b, (void *)(intptr_t)mine);
     lv_obj_set_style_bg_color(b, lv_color_hex(bg), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(b, TH_TERMINAL ? 0 : 16, 0);
@@ -259,6 +265,46 @@ static int bubble(int y, bool mine, const char *text, uint32_t fg, uint32_t bg)
     lv_obj_set_pos(l, PAD_X, PAD_Y);
     free(s);
     return y + h + GAP;
+}
+
+static int isqrt(int v) /* whole pixels are plenty */
+{
+    int r = 0;
+    while ((r + 1) * (r + 1) <= v) r++;
+    return r;
+}
+
+/* The round glass: at a bubble's height the circle leaves a chord; the bubble slides in to stay inside it (judged by
+   its rows in sight), and fades where even the chord is too narrow for it. */
+static void chat_fit(void)
+{
+    if (!a.box) return;
+    const int c = SCR / 2, r = SCR / 2;
+    uint32_t n = lv_obj_get_child_count(a.box);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t *b = lv_obj_get_child(a.box, (int32_t)i);
+        lv_area_t at;
+        lv_obj_get_coords(b, &at);
+        int w = lv_area_get_width(&at), top = LV_MAX(at.y1, CHAT_Y0), bottom = LV_MIN(at.y2, CHAT_Y1);
+        if (bottom < top) continue; /* out of sight: as it was */
+        int dy = LV_MAX(LV_ABS(top - c), LV_ABS(bottom - c));
+        int half = dy >= r ? 0 : isqrt(r * r - dy * dy) - EDGE; /* the narrowest row of the bubble */
+        bool mine = (intptr_t)lv_obj_get_user_data(b);
+        int x = mine ? LV_MIN(COL_R, c + half) - w : LV_MAX(COL_L, c - half);
+        x = LV_MAX(c - half, LV_MIN(x, c + half - w)); /* too wide for here: centred in what there is */
+        lv_obj_set_x(b, x);
+        int over = LV_MAX(0, w - 2 * half); /* sticks out of the glass */
+        int opa = 255 * LV_CLAMP(0, 60 - over, 60) / 60;
+        lv_obj_set_style_bg_opa(b, (lv_opa_t)opa, 0);
+        lv_obj_t *l = lv_obj_get_child(b, 0);
+        if (l) lv_obj_set_style_text_opa(l, (lv_opa_t)opa, 0);
+    }
+}
+
+static void chat_scrolled(lv_event_t *e)
+{
+    (void)e;
+    chat_fit();
 }
 
 static void page_hint(void)
@@ -283,19 +329,22 @@ static void page_build(void)
         lv_obj_add_flag(o, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
         th_header(o, "пип-01 // чат", 40);
-        a.box = lv_obj_create(o);
+        a.box = lv_obj_create(o); /* the full width: each bubble finds its own room in the circle */
         lv_obj_remove_style_all(a.box);
-        lv_obj_set_pos(a.box, BOX_X, BOX_Y);
-        lv_obj_set_size(a.box, BOX_W, BOX_H);
+        lv_obj_set_pos(a.box, 0, CHAT_Y0);
+        lv_obj_set_size(a.box, SCR, CHAT_Y1 - CHAT_Y0);
+        lv_obj_set_style_pad_ver(a.box, 6, 0);
         lv_obj_set_scroll_dir(a.box, LV_DIR_VER);
         lv_obj_set_scrollbar_mode(a.box, LV_SCROLLBAR_MODE_OFF);
+        lv_obj_add_event_cb(a.box, chat_scrolled, LV_EVENT_SCROLL, NULL);
+        lv_obj_move_to_index(a.box, 0); /* under the header */
         a.hint = lv_label_create(o);
         lv_obj_set_style_text_font(a.hint, th->tiny, 0);
         lv_obj_set_style_text_color(a.hint, lv_color_hex(th->dim), 0);
         lv_obj_align(a.hint, LV_ALIGN_TOP_MID, 0, 392);
     }
     lv_obj_clean(a.box);
-    int y = 4;
+    int y = 0;
     char who = 0;
     for (int i = 0; a.work && i < a.work->n; i++) {
         const char *t = chat_rec(a.work, i, &who);
@@ -307,9 +356,11 @@ static void page_build(void)
     if (a.state == ASK_LISTEN) y = bubble(y, false, "слушаю…", th->dim, th->panel);
     if (a.state == ASK_THINK) y = bubble(y, false, "думаю…", th->dim, th->panel);
     if (a.fail[0]) y = bubble(y, false, a.fail, th->dim, th->panel);
-    if (y == 4) bubble(y, false, "спроси что-нибудь: держи нижнюю кнопку", th->dim, th->panel);
+    if (y == 0) bubble(y, false, "спроси что-нибудь: держи нижнюю кнопку", th->dim, th->panel);
     lv_obj_update_layout(a.box);
     lv_obj_scroll_to_y(a.box, LV_COORD_MAX, LV_ANIM_OFF); /* the newest at the bottom, in view */
+    lv_obj_update_layout(a.box);
+    chat_fit();
     page_hint();
 }
 
