@@ -303,7 +303,7 @@ const fw = window.PIP_FIRMWARE;
 $('fwinfo').textContent = fw ? `В панели прошивка ${fw.version} от ${fw.built}.` : 'Файл прошивки не найден (docs/firmware/firmware.js).';
 
 /* ---------- the link: a USB serial port (Web Serial) or Bluetooth ---------- */
-let port = null, reader = null, ble = null, bleq = Promise.resolve(), alive = 0, cfg = null;
+let port = null, reader = null, reading = null, ble = null, bleq = Promise.resolve(), alive = 0, cfg = null;
 const enc = new TextEncoder();
 async function send(c) {
   if (port && port.writable) { const w = port.writable.getWriter(); await w.write(enc.encode(c + '\n')); w.releaseLock(); }
@@ -351,7 +351,7 @@ async function openPort(p) {
   port = p;
   await port.open({baudRate: 115200});
   try { await port.setSignals({dataTerminalReady: false, requestToSend: false}); } catch (e) {}
-  readLoop();
+  reading = readLoop();
   state('По кабелю', true);
   /* opening the port may reset the keychain: ask until it answers (it boots in ~4 s) */
   cfg = null;
@@ -362,8 +362,11 @@ async function closePort() {
   const p = port;
   port = null;
   try { if (reader) await reader.cancel(); } catch (e) {}
-  await new Promise(r => setTimeout(r, 100));
-  try { await p.close(); } catch (e) {}
+  await Promise.race([reading, new Promise(r => setTimeout(r, 1000))]).catch(() => {});
+  /* a send() still holding the writer makes close() throw: try again until the port is really shut */
+  for (let i = 0; i < 15 && (p.readable || p.writable); i++) {
+    try { await p.close(); } catch (e) { await new Promise(r => setTimeout(r, 200)); }
+  }
   return p;
 }
 function state(text, on) { $('state').textContent = text; document.body.classList.toggle('linked', on); }
