@@ -23,7 +23,7 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           . $IDF_PATH/export.sh
           sed -i 's|^source ~/esp/esp-idf/export.sh.*$|true|' tools/release.sh
-          bash tools/release.sh
+          bash tools/release.sh || { grep -h -B3 -A8 -E 'error:|undefined reference' firmware/build-release/log/idf_py_std*_output_* | head -200; exit 1; } # release.sh hides the compiler's output
       - name: Commit the firmware into the panel
         shell: bash
         run: |
