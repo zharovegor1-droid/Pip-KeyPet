@@ -48,7 +48,7 @@ int main(void)
     printf("adpcm: %d packets of %d bytes (%.1f KB/s), worst packet SNR %.1f dB\n", seq, ADPCM_HEADER + PER / 2,
            (ADPCM_HEADER + PER / 2) * (double)RATE / PER / 1024, worst);
     if (worst < 18) fails++, fprintf(stderr, "too noisy\n");
-    /* a fixed vector for the phone's decoder (ios/PipBridge/Sources/ADPCM.swift): the first packet of a known ramp */
+    /* a fixed vector for the phone's decoder (ios/PipBridge/ADPCM.swift): the first packet of a known ramp */
     adpcm_t z = {0};
     int16_t ramp[16];
     for (int i = 0; i < 16; i++) ramp[i] = (int16_t)(i * 1000 - 3000);

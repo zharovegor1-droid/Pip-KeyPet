@@ -513,7 +513,7 @@ static int dbg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
 static ble_uuid128_t DBG, DBG_RX, DBG_TX;
 static uint16_t dbg_tx;
 static int br_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg);
-static ble_uuid128_t BR, BR_RX, BR_TX, BR_AU;
+static ble_uuid128_t BRIDGE, BRIDGE_RX, BRIDGE_TX, BRIDGE_AU;
 static uint16_t br_tx, br_au;
 
 #define HOST_INPUT(id, handle) /* an input report of the computer's service, with its reference (id, input) */             \
@@ -557,11 +557,11 @@ static const struct ble_gatt_svc_def services[] = {
          {.uuid = BLE_UUID16_DECLARE(0x2A4E), .access_cb = hid_access, .arg = HOST_REPORT(1), .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE_NO_RSP},
          {0}}},
     /* after even that: the bridge to the PipBridge app (lines in, lines out, the voice out); bonded links only */
-    {.type = BLE_GATT_SVC_TYPE_PRIMARY, .uuid = &BR.u,
+    {.type = BLE_GATT_SVC_TYPE_PRIMARY, .uuid = &BRIDGE.u,
      .characteristics = (struct ble_gatt_chr_def[]){
-         {.uuid = &BR_RX.u, .access_cb = br_access, .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE_ENC},
-         {.uuid = &BR_TX.u, .access_cb = br_access, .val_handle = &br_tx, .flags = BLE_GATT_CHR_F_NOTIFY},
-         {.uuid = &BR_AU.u, .access_cb = br_access, .val_handle = &br_au, .flags = BLE_GATT_CHR_F_NOTIFY}, {0}}},
+         {.uuid = &BRIDGE_RX.u, .access_cb = br_access, .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE_ENC},
+         {.uuid = &BRIDGE_TX.u, .access_cb = br_access, .val_handle = &br_tx, .flags = BLE_GATT_CHR_F_NOTIFY},
+         {.uuid = &BRIDGE_AU.u, .access_cb = br_access, .val_handle = &br_au, .flags = BLE_GATT_CHR_F_NOTIFY}, {0}}},
     {0},
 };
 
@@ -1242,10 +1242,10 @@ void ble_start(void)
     uuid(&DBG, "50495044-4247-4B45-5950-455400000001");
     uuid(&DBG_RX, "50495044-4247-4B45-5950-455400000002");
     uuid(&DBG_TX, "50495044-4247-4B45-5950-455400000003");
-    uuid(&BR, "50495042-5249-4447-4500-000000000001"); /* "PIPBRIDGE": keep in step with ios/PipBridge/Sources/Bridge.swift */
-    uuid(&BR_RX, "50495042-5249-4447-4500-000000000002");
-    uuid(&BR_TX, "50495042-5249-4447-4500-000000000003");
-    uuid(&BR_AU, "50495042-5249-4447-4500-000000000004");
+    uuid(&BRIDGE, "50495042-5249-4447-4500-000000000001"); /* "PIPBRIDGE": keep in step with ios/PipBridge/Bridge.swift */
+    uuid(&BRIDGE_RX, "50495042-5249-4447-4500-000000000002");
+    uuid(&BRIDGE_TX, "50495042-5249-4447-4500-000000000003");
+    uuid(&BRIDGE_AU, "50495042-5249-4447-4500-000000000004");
     if (nimble_port_init() != ESP_OK) { ESP_LOGE(TAG, "NimBLE did not start"); return; }
     ble_npl_callout_init(&again, nimble_port_get_dflt_eventq(), look_again, NULL);
     ble_npl_callout_init(&claim, nimble_port_get_dflt_eventq(), claim_phone, NULL);
