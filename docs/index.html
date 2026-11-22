@@ -348,8 +348,14 @@ async function readLoop() {
   reader = null;
 }
 async function openPort(p) {
+  if (port) await closePort(); /* "Подключить" again: our own old connection goes first */
+  try { await p.open({baudRate: 115200}); }
+  catch (e) {
+    if (!/already open/i.test(e.message || '')) throw e;
+    try { await p.close(); } catch (e2) {} /* left open by this page before (a reconnect, a flash): shut and retry */
+    await p.open({baudRate: 115200});
+  }
   port = p;
-  await port.open({baudRate: 115200});
   try { await port.setSignals({dataTerminalReady: false, requestToSend: false}); } catch (e) {}
   reading = readLoop();
   state('По кабелю', true);
