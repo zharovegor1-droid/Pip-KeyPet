@@ -91,7 +91,6 @@ final class Bridge: NSObject, ObservableObject {
             pip.writeValue(part, for: rx, type: .withResponse)
             data.removeFirst(part.count)
         }
-        note("→ " + (line.hasPrefix("wifi+ ") ? "wifi+ …" : String(line.prefix(80))))
     }
 
     func refresh() {
@@ -205,11 +204,20 @@ final class Bridge: NSObject, ObservableObject {
         } else if line.hasPrefix("err ") {
             lastError = String(line.dropFirst(4))
         }
-        if !line.hasPrefix("stat ") { note("← " + String(line.prefix(80))) }
+        // the journal is for people: only what Pip did, not the protocol's chatter
+        switch line {
+        case _ where line.hasPrefix("ask start"): note("Пип слушает")
+        case "ask stop": note("Пип отпустил кнопку — распознаю")
+        case "ask cancel": note("вопрос отменён")
+        case "ask say": note("Пип просит прочитать ответ вслух")
+        case _ where line.hasPrefix("err "): note("ошибка Пипа: " + String(line.dropFirst(4)))
+        case _ where line.hasPrefix("hi "): note("Пип на связи, прошивка \(firmware)")
+        default: break
+        }
         delegate?.bridge(self, line: line)
     }
 
-    private func note(_ s: String) {
+    func note(_ s: String) {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss"
         log.append("\(f.string(from: Date())) \(s)")

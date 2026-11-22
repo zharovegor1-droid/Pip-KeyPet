@@ -87,6 +87,7 @@ final class Assistant: NSObject, ObservableObject, BridgeDelegate, @unchecked Se
                 return
             }
             self.live = question
+            self.bridge.note("вопрос: " + question)
             self.bridge.send("heard " + Assistant.oneLine(question))
             self.ask(question, gen: gen, toPip: true)
         }
@@ -134,11 +135,13 @@ final class Assistant: NSObject, ObservableObject, BridgeDelegate, @unchecked Se
         if toPip {
             for piece in Assistant.pieces(Assistant.forScreen(answer)) { bridge.send("A " + piece) }
             bridge.send("A.")
+            bridge.note("ответ отправлен на Пипа")
         }
         done()
     }
 
     private func fail(_ why: String, question: String) {
+        bridge.note("не вышло: " + why)
         bridge.send("fail " + Assistant.oneLine(why))
         record(question.isEmpty ? "—" : question, why, failed: true, fromPip: true)
         listener.cancel()
