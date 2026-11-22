@@ -46,8 +46,8 @@ struct StatusView: View {
                     }
                 }
                 Section("Журнал связи") {
-                    ForEach(bridge.log.suffix(30).reversed(), id: \.self) { line in
-                        Text(line).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    ForEach(Array(bridge.log.suffix(30).reversed().enumerated()), id: \.offset) { item in
+                        Text(item.element).font(.caption.monospaced()).foregroundStyle(.secondary)
                     }
                 }
             }
