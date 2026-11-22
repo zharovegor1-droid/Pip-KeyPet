@@ -57,29 +57,6 @@ const char *phone_command_name(int cmd)
     return cmd >= 0 && cmd < PHONE_CMD_COUNT ? names[cmd] : "";
 }
 
-/* drop what the theme's fonts cannot draw (emoji, their joiners and variation selectors, rare symbols):
-   a missing glyph would show as a gap or a box */
-static void drawable_only(char *s)
-{
-    const lv_font_t *font = th->small;
-    char *out = s;
-    for (const unsigned char *p = (const unsigned char *)s; *p;) {
-        uint32_t cp = *p;
-        int n = cp < 0x80 ? 1 : cp >= 0xF0 ? 4 : cp >= 0xE0 ? 3 : cp >= 0xC0 ? 2 : 1;
-        if (n > 1) {
-            cp &= 0xFF >> (n + 1);
-            for (int k = 1; k < n && p[k]; k++) cp = cp << 6 | (p[k] & 0x3F);
-        }
-        lv_font_glyph_dsc_t g;
-        bool keep = cp == '\n' || (cp != 0x200D && !(cp >= 0xFE00 && cp <= 0xFE0F) && lv_font_get_glyph_dsc(font, &g, cp, 0));
-        if (cp == ' ' && (out == s || out[-1] == ' ')) keep = false; /* the gap a dropped emoji leaves */
-        if (keep) memmove(out, p, (size_t)n), out += n;
-        p += n;
-    }
-    while (out > s && out[-1] == ' ') out--;
-    *out = 0;
-}
-
 /* copy UTF-8 without cutting a character in half */
 static void copy(char *d, size_t n, const char *s)
 {
@@ -290,7 +267,7 @@ void phone_call(uint32_t uid, const char *name, const char *kind)
     }
     ph.call.uid = uid;
     copy(ph.call.name, sizeof ph.call.name, name);
-    drawable_only(ph.call.name);
+    th_drawable(ph.call.name);
     copy(ph.call.kind, sizeof ph.call.kind, kind ? kind : "");
     call_show();
 }
@@ -613,7 +590,7 @@ void phone_note(uint32_t uid, const char *app, const char *title, const char *te
     n->secret = sensitive(app ? app : "", title ? title : "", text ? text : "");
     copy(n->title, sizeof n->title, n->secret ? "" : title); /* a code or a bank is not even kept */
     copy(n->text, sizeof n->text, n->secret ? "" : text);
-    drawable_only(n->app), drawable_only(n->title), drawable_only(n->text);
+    th_drawable(n->app), th_drawable(n->title), th_drawable(n->text);
     if (nt.scr && !nt.detail) nt_build();
 }
 
@@ -833,7 +810,7 @@ void phone_track(const char *title, const char *artist, int dur_s, float pos_s, 
     ph.tr.has = title != NULL;
     copy(ph.tr.title, sizeof ph.tr.title, title);
     copy(ph.tr.artist, sizeof ph.tr.artist, artist);
-    drawable_only(ph.tr.title), drawable_only(ph.tr.artist);
+    th_drawable(ph.tr.title), th_drawable(ph.tr.artist);
     ph.tr.dur = dur_s, ph.tr.pos = pos_s, ph.tr.playing = playing, ph.tr.at = lv_tick_get();
     mu_update(NULL);
 }

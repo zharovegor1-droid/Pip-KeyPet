@@ -9,7 +9,7 @@ add_subdirectory(../third_party/lvgl lvgl)
 
 file(GLOB THEME_FONTS ../ui/fonts/font_*_*.c)
 set(UI ../ui/face.c ../ui/imu.c ../ui/pip.c ../ui/doodle.c ../ui/pet.c ../ui/shell.c ../ui/apps.c ../ui/voice.c ../ui/profile.c
-       ../ui/theme.c ../ui/phone.c ../ui/mic.c ${THEME_FONTS})
+       ../ui/theme.c ../ui/phone.c ../ui/mic.c ../ui/ask.c ../ui/adpcm.c ${THEME_FONTS})
 
 # the owner's own extras, kept out of the public repo (private/ is gitignored): the AITU mark on the badge
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../private/aitu_mark.c)
@@ -33,6 +33,9 @@ else()
     add_executable(voice_test voice_test.c ../ui/voice.c)
     target_include_directories(voice_test PRIVATE ../ui)
     target_link_libraries(voice_test PRIVATE m)
+    add_executable(adpcm_test adpcm_test.c ../ui/adpcm.c)
+    target_include_directories(adpcm_test PRIVATE ../ui)
+    target_link_libraries(adpcm_test PRIVATE m)
     add_executable(pet_test pet_test.c ../ui/pet.c)
     target_include_directories(pet_test PRIVATE ../ui)
     target_link_libraries(pet_test PRIVATE m)

@@ -9,3 +9,5 @@ const char *fake_phone_last(void); /* the last command the keychain sent, "" if 
 int fake_phone_shots(void);        /* photos taken with the shutter */
 void fake_host(int arg);              /* the fake computer: 0 gone, 1 asks to pair, 2 paired and back */
 const char *fake_host_report(void); /* "host=on clicks=.. prevs=.. mx=.. my=..": what the remote sent it */
+void fake_bridge(int mode);           /* the bridge app on the phone: 0 gone, 1 there (answers), 2 there but the answer fails */
+const char *fake_bridge_report(void); /* "ask=<state> app=.. starts=.. stops=.. cancels=.. says=.." */

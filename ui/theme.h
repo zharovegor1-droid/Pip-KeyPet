@@ -33,6 +33,7 @@ const char *th_label(const char *text);              /* upper-cased when the the
 lv_obj_t *th_text(lv_obj_t *parent, const lv_font_t *font, uint32_t color, const char *text);
 lv_obj_t *th_button(lv_obj_t *parent, const char *text, bool primary, lv_event_cb_t cb);
 void th_screen(lv_obj_t *scr);                        /* background colour and the dot grid */
+void th_drawable(char *s);                            /* drop what the fonts cannot draw (emoji and the like), in place */
 
 /* ---------- "Диагностика": the terminal look, built from cells on an 11 px pitch (see the design canvas) ---------- */
 #define TH_TERMINAL (th == &themes[TH_DIAG])

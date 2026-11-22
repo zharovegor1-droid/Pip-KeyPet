@@ -18,6 +18,7 @@
                  K<knob>=<v>    set a knob (pet_knobs[] in ui/pet.c), e.g. Kloud_db=70
                  L<0|1|2> N C<0|1> M<0|1>  the fake iPhone: link off/pairing/on, a notification, a call, music
                  X<0|1|2>       a fake computer for the remote: gone, asks to pair, paired and back
+                 I<0|1|2>       the iPhone bridge app (the assistant): gone, there, there but the answer fails
                  g<gx>,<gy>,<gz> gyroscope, deg/s, device axes, held until changed
                  Z              "Обновление" on top: the panel is about to flash
                  E<0|1>         energy saving off/on
@@ -132,6 +133,7 @@ static void run_event(const char *ev)
     else if (ev[0] == 'a' && sscanf(ev + 1, "%f,%f,%f", &acc[0], &acc[1], &acc[2]) == 3) {}
     else if (ev[0] == 'g' && sscanf(ev + 1, "%f,%f,%f", &gyro[0], &gyro[1], &gyro[2]) == 3) {}
     else if (ev[0] == 'X') fake_host(atoi(ev + 1));
+    else if (ev[0] == 'I') fake_bridge(atoi(ev + 1));
     else if ((ev[0] == 'd' || ev[0] == 'm') && sscanf(ev + 1, "%d,%d", &x, &y) == 2) {
         ptr.x = x;
         ptr.y = y;
@@ -235,9 +237,9 @@ int main(int argc, char **argv)
     printf("pet: hour=%d\n", in.hour);
     pet_why_t why;
     int base = pet_mood_why(pip_pet(), &why);
-    printf("status: mood=%s reaction=%s steps=%d face_down=%d asleep=%d auto=%d screen=%s theme=%d phone=%s shots=%d base=%s why=%d display=%d eco=%d mic=%d %s\n",
+    printf("status: mood=%s reaction=%s steps=%d face_down=%d asleep=%d auto=%d screen=%s theme=%d phone=%s shots=%d base=%s why=%d display=%d eco=%d mic=%d %s %s\n",
            in.mood, in.reaction, in.steps, in.face_down, in.asleep, in.auto_mood, shell_where(), theme_index(),
            *fake_phone_last() ? fake_phone_last() : "-", fake_phone_shots(), pip_mood_name(base), why.kind, pip_display_on(), pip_eco_on(), pip_mic_wanted(),
-           fake_host_report());
+           fake_host_report(), fake_bridge_report());
     return pclose(ff) ? 1 : 0;
 }

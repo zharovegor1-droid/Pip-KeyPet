@@ -1,6 +1,7 @@
 #include "fakephone.h"
 #include "lvgl.h"
 #include "phone.h"
+#include "ask.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -83,7 +84,39 @@ static void bt_query(phone_bt_t *s) /* the Bluetooth page: the pretend phone and
 }
 static void bt_act(int what) { fp.last = what == BT_RECONNECT_PHONE ? "bt reconnect" : "bt forget"; }
 
-void fake_phone_init(void) { phone_on_command(on_command), phone_on_host(on_host), phone_on_bt(bt_query, bt_act); }
+/* ---------- the bridge app (ios/PipBridge): hears the question, answers it in pieces like the real one ---------- */
+static struct { int mode, starts, stops, cancels, says, piece; lv_timer_t *t; } br; /* mode: 0 gone, 1 answers, 2 fails */
+static const char *const answer[] = {"В Ереване сейчас +4 °C, ясно, ", "ветер слабый. ", "Вечером до 0 °C — ", "возьми шапку.\tЗавтра теплее: до +9."};
+
+static void br_tick(lv_timer_t *t)
+{
+    if (br.piece == 0) ask_heard("какая погода в Ереване?");
+    if (br.mode == 2) { ask_fail("Claude не ответил: нет сети."); lv_timer_delete(t), br.t = NULL; return; }
+    if (br.piece < (int)(sizeof answer / sizeof answer[0])) { ask_answer(answer[br.piece++]); return; }
+    ask_done();
+    lv_timer_delete(t), br.t = NULL;
+}
+
+static void on_ask(int what)
+{
+    if (br.t) lv_timer_delete(br.t), br.t = NULL;
+    if (what == ASK_START) br.starts++;
+    if (what == ASK_CANCEL) br.cancels++;
+    if (what == ASK_SAY) br.says++;
+    if (what == ASK_STOP) br.stops++, br.piece = 0, br.t = lv_timer_create(br_tick, 250, NULL); /* recognized, asked, answered */
+}
+
+void fake_bridge(int mode) { br.mode = mode, ask_app(mode != 0); }
+
+const char *fake_bridge_report(void)
+{
+    static char s[96];
+    snprintf(s, sizeof s, "ask=%s app=%d starts=%d stops=%d cancels=%d says=%d", ask_state_name(), ask_app_on(), br.starts, br.stops,
+             br.cancels, br.says);
+    return s;
+}
+
+void fake_phone_init(void) { phone_on_command(on_command), phone_on_host(on_host), phone_on_bt(bt_query, bt_act), ask_on_host(on_ask); }
 
 void fake_host(int arg) /* X0 gone, X1 a computer asks to pair (the code on screen), X2 a paired one is back */
 {

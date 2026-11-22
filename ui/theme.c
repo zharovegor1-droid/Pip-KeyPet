@@ -393,3 +393,25 @@ lv_obj_t *th_plate(lv_obj_t *scr, int x, int y, int w, int h, const lv_font_t *f
     return p;
 }
 
+/* drop what the theme's fonts cannot draw (emoji, their joiners and variation selectors, rare symbols):
+   a missing glyph would show as a gap or a box */
+void th_drawable(char *s)
+{
+    const lv_font_t *font = th->small;
+    char *out = s;
+    for (const unsigned char *p = (const unsigned char *)s; *p;) {
+        uint32_t cp = *p;
+        int n = cp < 0x80 ? 1 : cp >= 0xF0 ? 4 : cp >= 0xE0 ? 3 : cp >= 0xC0 ? 2 : 1;
+        if (n > 1) {
+            cp &= 0xFF >> (n + 1);
+            for (int k = 1; k < n && p[k]; k++) cp = cp << 6 | (p[k] & 0x3F);
+        }
+        lv_font_glyph_dsc_t g;
+        bool keep = cp == '\n' || (cp != 0x200D && !(cp >= 0xFE00 && cp <= 0xFE0F) && lv_font_get_glyph_dsc(font, &g, cp, 0));
+        if (cp == ' ' && (out == s || out[-1] == ' ')) keep = false; /* the gap a dropped emoji leaves */
+        if (keep) memmove(out, p, (size_t)n), out += n;
+        p += n;
+    }
+    while (out > s && out[-1] == ' ') out--;
+    *out = 0;
+}

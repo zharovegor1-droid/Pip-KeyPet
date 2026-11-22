@@ -28,6 +28,7 @@
 #include "phone.h"
 #include "profile.h"
 #include "mic.h"
+#include "ask.h"
 #include "voice.h"
 
 static const char *TAG = "keypet";
@@ -461,11 +462,12 @@ static void mic_task(void *arg)
     }
     esp_codec_dev_set_in_gain(mic, MIC_GAIN_DB);
     static int16_t buf[AUDIO_RATE / 50];
-    bool open = true;
+    bool open = true, streamed = false;
     for (int k = 0;; k++) {
-        if (k % 25 == 0) { /* twice a second: does anyone listen? (Pip's breath and bangs, the noise meter) */
+        bool stream = ask_streaming(); /* the assistant listens: the voice goes to the iPhone, from the first 20 ms */
+        if (k % 25 == 0 || (stream && !open)) { /* twice a second: does anyone listen? (Pip's breath and bangs, the noise meter) */
             ui_lock();
-            bool want = pip_mic_wanted() || !strcmp(shell_where(), "noise");
+            bool want = stream || pip_mic_wanted() || !strcmp(shell_where(), "noise");
             ui_unlock();
             if (want != open) {
                 if (want) open = esp_codec_dev_open(mic, &fs) == ESP_CODEC_DEV_OK, esp_codec_dev_set_in_gain(mic, MIC_GAIN_DB);
@@ -473,9 +475,13 @@ static void mic_task(void *arg)
                 ESP_LOGI(TAG, "microphone %s", open ? "on" : "off");
             }
         }
+        if (streamed && !stream) ble_audio_end();
+        streamed = stream;
         if (!open) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
-        if (esp_codec_dev_read(mic, buf, sizeof buf) == ESP_CODEC_DEV_OK) mic_feed(buf, AUDIO_RATE / 50, AUDIO_RATE);
-        else vTaskDelay(pdMS_TO_TICKS(20));
+        if (esp_codec_dev_read(mic, buf, sizeof buf) == ESP_CODEC_DEV_OK) {
+            if (stream) ble_audio(buf, AUDIO_RATE / 50); /* the words are no bang to be startled by: the meter skips them */
+            else mic_feed(buf, AUDIO_RATE / 50, AUDIO_RATE);
+        } else vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 

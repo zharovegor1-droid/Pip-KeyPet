@@ -11,7 +11,9 @@
    connection; the phone reads a mouse alone, or iOS would hide its on-screen keyboard. Connections: the phone, the debug
    page and a computer; a second one that asks for encryption is the computer, a first one that turns out to have
    neither notifications nor music is a computer too, and a computer once seen is known by its address.
-   Everything the UI sees goes through phone.h, like the simulator's fake phone. */
+   Everything the UI sees goes through phone.h, like the simulator's fake phone.
+   One thing does want an app: the assistant (ask.h). The PipBridge app (ios/) talks to our own bridge service over the
+   phone's same link: text lines both ways and the voice as ADPCM; it also keeps the Wi-Fi list and reads the status. */
 #include "board.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -22,10 +24,17 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "phone.h"
+#include "ask.h"
+#include "adpcm.h"
+#include "pip.h"
+#include "theme.h"
+#include "esp_app_desc.h"
+#include "esp_heap_caps.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include "shell.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
 #include <time.h>
@@ -503,6 +512,9 @@ static int hid_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
 static int dbg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg);
 static ble_uuid128_t DBG, DBG_RX, DBG_TX;
 static uint16_t dbg_tx;
+static int br_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg);
+static ble_uuid128_t BR, BR_RX, BR_TX, BR_AU;
+static uint16_t br_tx, br_au;
 
 #define HOST_INPUT(id, handle) /* an input report of the computer's service, with its reference (id, input) */             \
     {.uuid = BLE_UUID16_DECLARE(0x2A4D), .access_cb = hid_access, .arg = HOST_REPORT(id), .val_handle = &handle,            \
@@ -544,6 +556,12 @@ static const struct ble_gatt_svc_def services[] = {
          {.uuid = BLE_UUID16_DECLARE(0x2A4C), .access_cb = hid_access, .arg = HOST_REPORT(1), .flags = BLE_GATT_CHR_F_WRITE_NO_RSP},
          {.uuid = BLE_UUID16_DECLARE(0x2A4E), .access_cb = hid_access, .arg = HOST_REPORT(1), .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE_NO_RSP},
          {0}}},
+    /* after even that: the bridge to the PipBridge app (lines in, lines out, the voice out); bonded links only */
+    {.type = BLE_GATT_SVC_TYPE_PRIMARY, .uuid = &BR.u,
+     .characteristics = (struct ble_gatt_chr_def[]){
+         {.uuid = &BR_RX.u, .access_cb = br_access, .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE_ENC},
+         {.uuid = &BR_TX.u, .access_cb = br_access, .val_handle = &br_tx, .flags = BLE_GATT_CHR_F_NOTIFY},
+         {.uuid = &BR_AU.u, .access_cb = br_access, .val_handle = &br_au, .flags = BLE_GATT_CHR_F_NOTIFY}, {0}}},
     {0},
 };
 
@@ -782,6 +800,234 @@ void ble_debug_send(const char *s, int n) /* notifications as big as the link al
     }
 }
 
+/* ---------- the bridge: the PipBridge app on the iPhone (ios/PipBridge) ----------
+   It rides the phone's own link (iOS keeps one link to us for the system and every app). Lines end in '\n', either way;
+   one may span several writes or notifications. The app subscribes to TX: that is "the app is here".
+     app -> Pip   hello | heard <text> | A <piece> ('\t' = new line) | A. | fail <why> | stat? | wifi? | wifi+ <ssid>\t<pass> | wifi- <ssid>
+     Pip -> app   hi <protocol> <firmware> | ask start <rate> | ask stop | ask cancel | ask say | stat {json} | wifi+ <ssid> ... wifi. | ok <what> | err <what>
+   The voice: AU notifications, IMA ADPCM at 16 kHz, each packet [seq][predictor i16][index][nibbles] (ui/adpcm.h). */
+#define BR_PROTOCOL 1
+#define WIFI_MAX 8
+static uint16_t br_conn = BLE_HS_CONN_HANDLE_NONE; /* the link the app subscribed on */
+
+static void ui_ask_on(void *a) { (void)a; ask_app(true); }
+static void ui_ask_off(void *a) { (void)a; ask_app(false); }
+static void ui_ask_heard(void *a) { ask_heard(a); }
+static void ui_ask_piece(void *a) { ask_answer(a); }
+static void ui_ask_done(void *a) { (void)a; ask_done(); }
+static void ui_ask_fail(void *a) { ask_fail(a); }
+
+static void br_send(const char *s) /* a line to the app; dropped if the buffers stay full (never waits long: the UI may hold its lock) */
+{
+    uint16_t c = br_conn;
+    if (c == BLE_HS_CONN_HANDLE_NONE || !br_tx) return;
+    int n = (int)strlen(s), mtu = ble_att_mtu(c) - 3;
+    if (mtu < 20) mtu = 20;
+    for (int at = 0, tries = 0; at < n;) {
+        int k = n - at < mtu ? n - at : mtu;
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(s + at, (uint16_t)k);
+        int rc = om ? ble_gatts_notify_custom(c, br_tx, om) : BLE_HS_ENOMEM;
+        if ((rc == BLE_HS_ENOMEM || rc == BLE_HS_EBUSY) && ++tries < 4) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
+        if (rc) return;
+        at += k, tries = 0;
+    }
+}
+
+/* ---------- the voice ---------- */
+typedef struct { adpcm_t st; uint8_t seq; int n; int16_t pcm[480]; uint8_t pkt[ADPCM_HEADER + 240]; } au_t;
+static au_t *aup; /* in PSRAM once the assistant first listens: internal RAM is the scarce one */
+#define au (*aup)
+
+static void au_flush(void)
+{
+    if (!aup) return;
+    uint16_t c = br_conn;
+    int n = au.n & ~1;
+    au.n = 0;
+    if (c == BLE_HS_CONN_HANDLE_NONE || !n) return;
+    int len = adpcm_packet(&au.st, au.seq++, au.pcm, n, au.pkt);
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(au.pkt, (uint16_t)len);
+    if (om && ble_gatts_notify_custom(c, br_au, om)) ESP_LOGD(TAG, "a voice packet dropped"); /* a 20 ms gap; the next one stands alone */
+}
+
+void ble_audio(const int16_t *pcm, int n) /* from the microphone task while ask_streaming() */
+{
+    uint16_t c = br_conn;
+    if (c == BLE_HS_CONN_HANDLE_NONE || !aup) return;
+    int per = (ble_att_mtu(c) - 3 - ADPCM_HEADER) * 2; /* as many samples as one notification carries */
+    if (per > 480) per = 480;
+    if (per < 32) per = 32;
+    for (int i = 0; i < n; i++) {
+        au.pcm[au.n++] = pcm[i];
+        if (au.n >= per) au_flush();
+    }
+}
+
+void ble_audio_end(void) { au_flush(); }
+
+static void ask_cmd(int what) /* from the UI (its lock held) */
+{
+    char l[32];
+    switch (what) {
+    case ASK_START:
+        if (!aup) aup = heap_caps_calloc(1, sizeof(au_t), MALLOC_CAP_SPIRAM);
+        if (!aup) return;
+        au.st = (adpcm_t){0}, au.seq = 0, au.n = 0;
+        snprintf(l, sizeof l, "ask start 16000\n");
+        break;
+    case ASK_STOP: snprintf(l, sizeof l, "ask stop\n"); break;
+    case ASK_CANCEL: snprintf(l, sizeof l, "ask cancel\n"); break;
+    case ASK_SAY: snprintf(l, sizeof l, "ask say\n"); break;
+    default: return;
+    }
+    br_send(l);
+}
+
+/* ---------- the status ---------- */
+typedef struct { int bat; bool chg; const char *mood; int theme; } br_ui_t;
+static void ui_stat(void *a)
+{
+    br_ui_t *u = a;
+    pip_info_t in;
+    pip_get_info(&in);
+    u->bat = shell_battery_level(&u->chg), u->mood = in.mood, u->theme = theme_index();
+}
+
+static int wifi_count(void);
+static void br_stat(void)
+{
+    br_ui_t u = {0};
+    ui(ui_stat, &u);
+    int8_t rssi = 0;
+    if (br_conn != BLE_HS_CONN_HANDLE_NONE) ble_gap_conn_rssi(br_conn, &rssi);
+    char l[256];
+    snprintf(l, sizeof l,
+             "stat {\"bat\":%d,\"chg\":%s,\"fw\":\"%s\",\"up\":%lld,\"ram\":%u,\"psram\":%u,\"rssi\":%d,\"mood\":\"%s\",\"theme\":%d,"
+             "\"wifi\":%d,\"mtu\":%d}\n",
+             u.bat, u.chg ? "true" : "false", esp_app_get_description()->version, (long long)(esp_timer_get_time() / 1000000),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), rssi,
+             u.mood ? u.mood : "", u.theme, wifi_count(), br_conn != BLE_HS_CONN_HANDLE_NONE ? ble_att_mtu(br_conn) : 0);
+    br_send(l);
+}
+
+/* ---------- the Wi-Fi networks, kept for later (the home server): names and passwords in NVS, only names go out ---------- */
+typedef struct { char ssid[33], pass[65]; } wifi_t;
+
+static int wifi_load(wifi_t *w)
+{
+    nvs_handle_t h;
+    size_t n = sizeof(wifi_t) * WIFI_MAX;
+    if (nvs_open("keypet", NVS_READONLY, &h) != ESP_OK) return 0;
+    if (nvs_get_blob(h, "wifi", w, &n) != ESP_OK) n = 0;
+    nvs_close(h);
+    return (int)(n / sizeof(wifi_t));
+}
+
+static bool wifi_keep(const wifi_t *w, int k)
+{
+    nvs_handle_t h;
+    if (nvs_open("keypet", NVS_READWRITE, &h) != ESP_OK) return false;
+    esp_err_t e = k ? nvs_set_blob(h, "wifi", w, sizeof(wifi_t) * k) : nvs_erase_key(h, "wifi");
+    if (e == ESP_OK || e == ESP_ERR_NVS_NOT_FOUND) e = nvs_commit(h);
+    nvs_close(h);
+    return e == ESP_OK;
+}
+
+static int wifi_count(void)
+{
+    wifi_t *w = malloc(sizeof(wifi_t) * WIFI_MAX);
+    int k = w ? wifi_load(w) : 0;
+    free(w);
+    return k;
+}
+
+static void wifi_cmd(char op, char *arg) /* '?' list, '+' add or change, '-' forget */
+{
+    wifi_t *w = malloc(sizeof(wifi_t) * WIFI_MAX);
+    if (!w) { br_send("err wifi: no memory\n"); return; }
+    int k = wifi_load(w);
+    char l[64];
+    if (op == '?') {
+        for (int i = 0; i < k; i++) snprintf(l, sizeof l, "wifi+ %s\n", w[i].ssid), br_send(l);
+        br_send("wifi.\n");
+        free(w);
+        return;
+    }
+    char *pass = strchr(arg, '\t');
+    if (pass) *pass++ = 0;
+    int at = -1;
+    for (int i = 0; i < k; i++)
+        if (!strcmp(w[i].ssid, arg)) at = i;
+    bool ok = *arg && strlen(arg) <= 32 && (!pass || strlen(pass) <= 64);
+    if (ok && op == '+') {
+        if (at < 0 && k == WIFI_MAX) ok = false;
+        else {
+            if (at < 0) at = k++;
+            memset(&w[at], 0, sizeof w[at]);
+            strcpy(w[at].ssid, arg);
+            if (pass) strcpy(w[at].pass, pass);
+            ok = wifi_keep(w, k);
+        }
+    } else if (ok && op == '-') {
+        if (at >= 0) memmove(&w[at], &w[at + 1], sizeof(wifi_t) * (k - at - 1)), k--, ok = wifi_keep(w, k);
+    }
+    memset(w, 0, sizeof(wifi_t) * WIFI_MAX); /* passwords do not linger on the heap */
+    free(w);
+    if (ok) br_send("ok wifi\n");
+    else snprintf(l, sizeof l, "err wifi: %s\n", k == WIFI_MAX ? "the list is full (8)" : "a bad name or password"), br_send(l);
+    if (ok) wifi_cmd('?', NULL);
+}
+
+static void br_line(char *l)
+{
+    if (!strcmp(l, "hello")) {
+        char hi[48];
+        snprintf(hi, sizeof hi, "hi %d %s\n", BR_PROTOCOL, esp_app_get_description()->version);
+        br_send(hi);
+        br_stat();
+    } else if (!strncmp(l, "A ", 2)) ui(ui_ask_piece, l + 2);
+    else if (!strcmp(l, "A.")) ui(ui_ask_done, NULL);
+    else if (!strncmp(l, "heard ", 6)) ui(ui_ask_heard, l + 6);
+    else if (!strncmp(l, "fail ", 5)) ui(ui_ask_fail, l + 5);
+    else if (!strcmp(l, "stat?")) br_stat();
+    else if (!strcmp(l, "wifi?")) wifi_cmd('?', NULL);
+    else if (!strncmp(l, "wifi+ ", 6)) wifi_cmd('+', l + 6);
+    else if (!strncmp(l, "wifi- ", 6)) wifi_cmd('-', l + 6);
+    else ESP_LOGW(TAG, "bridge: unknown line \"%.20s\"", l);
+}
+
+static void br_subscribe(uint16_t conn, uint16_t handle, bool on);
+static int br_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return 0;
+    if (conn != b.conn) return BLE_ATT_ERR_INSUFFICIENT_AUTHOR; /* the phone's link only */
+    if (br_conn != conn) br_subscribe(conn, br_tx, true); /* it wrote before we knew the link was the phone's */
+    static char line[320];
+    static int len;
+    uint8_t d[256];
+    uint16_t n = 0;
+    ble_hs_mbuf_to_flat(ctxt->om, d, sizeof d, &n);
+    for (int i = 0; i < n; i++) {
+        if (d[i] == '\n') line[len] = 0, br_line(line), len = 0;
+        else if (len < (int)sizeof line - 1) line[len++] = (char)d[i];
+    }
+    return 0;
+}
+
+static void br_subscribe(uint16_t conn, uint16_t handle, bool on) /* GAP: someone switched our notifications */
+{
+    if (handle != br_tx || conn != b.conn) return;
+    if (on == (br_conn == conn)) return;
+    br_conn = on ? conn : BLE_HS_CONN_HANDLE_NONE;
+    ESP_LOGI(TAG, "bridge app %s", on ? "here" : "gone");
+    ui(on ? ui_ask_on : ui_ask_off, NULL);
+}
+
+static void br_gone(uint16_t conn)
+{
+    if (conn == br_conn) br_subscribe(conn, br_tx, false);
+}
+
 /* ---------- GAP ---------- */
 static int gap_event(struct ble_gap_event *e, void *arg)
 {
@@ -817,6 +1063,7 @@ static int gap_event(struct ble_gap_event *e, void *arg)
             break;
         }
         ESP_LOGI(TAG, "disconnected (%d)", e->disconnect.reason);
+        br_gone(e->disconnect.conn.conn_handle);
         b.connected = false, b.conn = BLE_HS_CONN_HANDLE_NONE;
         ui(ui_link_off, NULL);
         advertise();
@@ -859,6 +1106,9 @@ static int gap_event(struct ble_gap_event *e, void *arg)
         if (!ble_gap_conn_find(e->repeat_pairing.conn_handle, &d)) ble_store_util_delete_peer(&d.peer_id_addr);
         return BLE_GAP_REPEAT_PAIRING_RETRY;
     }
+    case BLE_GAP_EVENT_SUBSCRIBE:
+        br_subscribe(e->subscribe.conn_handle, e->subscribe.attr_handle, e->subscribe.cur_notify);
+        break;
     case BLE_GAP_EVENT_NOTIFY_RX: {
         uint8_t d[256];
         uint16_t n = 0;
@@ -950,7 +1200,7 @@ static void advertise(void)
 
 /* Bump when the services table changes: phones and computers bonded to the old one are told once (Service Changed, on
    their next connection) to look at our services again instead of trusting the handles they cached. */
-#define GATT_LAYOUT 2 /* 2: the computer's service gained the keyboard and media reports */
+#define GATT_LAYOUT 3 /* 2: the computer's service gained the keyboard and media reports; 3: the bridge service */
 
 static void gatt_layout_check(void)
 {
@@ -992,6 +1242,10 @@ void ble_start(void)
     uuid(&DBG, "50495044-4247-4B45-5950-455400000001");
     uuid(&DBG_RX, "50495044-4247-4B45-5950-455400000002");
     uuid(&DBG_TX, "50495044-4247-4B45-5950-455400000003");
+    uuid(&BR, "50495042-5249-4447-4500-000000000001"); /* "PIPBRIDGE": keep in step with ios/PipBridge/Sources/Bridge.swift */
+    uuid(&BR_RX, "50495042-5249-4447-4500-000000000002");
+    uuid(&BR_TX, "50495042-5249-4447-4500-000000000003");
+    uuid(&BR_AU, "50495042-5249-4447-4500-000000000004");
     if (nimble_port_init() != ESP_OK) { ESP_LOGE(TAG, "NimBLE did not start"); return; }
     ble_npl_callout_init(&again, nimble_port_get_dflt_eventq(), look_again, NULL);
     ble_npl_callout_init(&claim, nimble_port_get_dflt_eventq(), claim_phone, NULL);
@@ -1012,6 +1266,7 @@ void ble_start(void)
     phone_on_command(command);
     phone_on_bt(bt_query, bt_act);
     phone_on_host(host_cmd);
+    ask_on_host(ask_cmd);
     hosts_load(); /* the computers we know */
     nimble_port_freertos_init(host_task);
     up = true;

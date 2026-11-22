@@ -96,6 +96,15 @@ held + the gyroscope = pointer, a tap = click. The music app sends media keys to
 In the sim the computer is `fakephone.c` too (event `X0/1/2`, `B<s>` holds the bottom key; the status ends with
 `host=… nexts=… prevs=… clicks=… mx=… my=… scroll=… media=…`).
 
+**Assistant** (`ui/ask.c` ↔ ble.c's bridge service ↔ `ios/PipBridge`, `sim/fakephone.c` in the sim): on Pip's face the
+bottom key held = push to talk (a tap < 350 ms still blinks). Pip listens (`listen` reaction), the mic task streams 16 kHz
+as IMA ADPCM packets (`ui/adpcm.c`, each packet carries its coder state) while `ask_streaming()`; let go: `think`, then
+the answer arrives as `A <piece>` lines and shows on a scrollable page (top = read aloud on the phone, bottom = back).
+The bridge is the last GATT service (`GATT_LAYOUT` 3); its line protocol is described above `br_line()` in ble.c. It also
+keeps the Wi-Fi list (NVS `wifi`, 8 networks, only names go out) and answers `stat?`. Sim: `I0/1/2` = no app / app /
+app whose answer fails; the status ends with `ask=… app=… starts=… stops=… cancels=… says=…`. The iOS app is a plain
+SwiftUI project (ios/README.md), signed with a free Apple ID.
+
 **Board display port** (firmware/main/main.c): own LVGL port, DIRECT mode into one PSRAM frame buffer
 (RGB565_SWAPPED), flush waits for the panel's TE pulse and streams dirty rows in 8 KB DMA chunks at 80 MHz QSPI;
 LVGL on core 0, the face renderer splits rows across both cores (hot loops in IRAM, `-O2`). Pip's canvas is drawn in

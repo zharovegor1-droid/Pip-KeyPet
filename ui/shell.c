@@ -1,6 +1,7 @@
 #include "shell.h"
 #include "doodle.h"
 #include "phone.h"
+#include "ask.h"
 #include "pip.h"
 #include "theme.h"
 #include "voice.h"
@@ -683,7 +684,7 @@ static void dot_tick(lv_timer_t *t)
     if (on == lv_obj_has_flag(sh.dot, LV_OBJ_FLAG_HIDDEN)) lv_obj_set_flag(sh.dot, LV_OBJ_FLAG_HIDDEN, !on);
 }
 
-/* Top (PWR): Pip -> the notifications if the red dot is lit, else the menu -> the app in the middle; apps may use it. Bottom (BOOT): free on Pip (the assistant's, later),
+/* Top (PWR): Pip -> the notifications if the red dot is lit, else the menu -> the app in the middle; apps may use it. Bottom (BOOT): on Pip held = the assistant (ask.c), a tap blinks;
    back to Pip from the menu, back to the menu from an app unless the app uses it. */
 void shell_button(int id)
 {
@@ -691,11 +692,12 @@ void shell_button(int id)
     pip_seen();
     if (dark) return; /* the press that wakes the screen does nothing else */
     if (phone_button(id)) return; /* a call, the pairing or a banner answers first */
+    if (ask_where() && ask_button(id)) return; /* the assistant listening, thinking or showing its answer */
     lv_obj_t *now = lv_screen_active();
     if (now == sh.pip_scr) {
         if (id == PIP_BTN_PWR && phone_fresh()) shell_open("notify");
         else if (id == PIP_BTN_PWR) show_menu(LV_SCREEN_LOAD_ANIM_FADE_IN);
-        else pip_button(id);
+        else if (!ask_press()) pip_button(id); /* held: the assistant (ask.c); a tap still blinks */
     } else if (now == sh.menu_scr) {
         if (id == PIP_BTN_PWR) open_app(sh.style == MENU_HONEYCOMB ? hex_focus() : sh.style == MENU_LIST ? sh.lo + list_middle() : car_middle());
         else if (sh.group) group_leave(); /* out of the games first */
@@ -722,6 +724,7 @@ void shell_time(int64_t unix_s, int tz_min)
 
 void shell_button_up(int id)
 {
+    if (id == PIP_BTN_BOOT) ask_release(); /* nothing unless the assistant took the press */
     if (sh.open >= 0 && apps[sh.open].button_up) apps[sh.open].button_up(id);
 }
 
@@ -733,7 +736,7 @@ void shell_gyro(float gx, float gy, float gz, float dt)
 void shell_imu(float ax, float ay, float az, float dt)
 {
     bool awake = sh.open >= 0 && apps[sh.open].awake;
-    pip_hold_awake(awake || sh.updating);
+    pip_hold_awake(awake || sh.updating || ask_where()); /* an answer is there to be read */
     if (!pip_display_on() && lv_screen_active() != sh.pip_scr && !awake && !phone_where()) shell_home(); /* asleep: back to his face */
     pip_shake_ok(sh.open < 0 || !apps[sh.open].imu); /* shaking a die is not shaking him */
     pip_imu(ax, ay, az, dt);
