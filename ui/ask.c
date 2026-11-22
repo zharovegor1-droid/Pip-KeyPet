@@ -189,7 +189,7 @@ const char *ask_say_text(void)
 {
     if (a.answering && a.answer) return a.answer;
     const char *last = NULL;
-    char who;
+    char who = 0;
     for (int i = 0; a.work && i < a.work->n; i++) {
         const char *t = chat_rec(a.work, i, &who);
         if (who == 'A') last = t;
@@ -296,7 +296,7 @@ static void page_build(void)
     }
     lv_obj_clean(a.box);
     int y = 4;
-    char who;
+    char who = 0;
     for (int i = 0; a.work && i < a.work->n; i++) {
         const char *t = chat_rec(a.work, i, &who);
         y = who == 'Q' ? bubble(y, true, t, th->bg, th->accent) : bubble(y, false, t, th->text, th->panel);
@@ -366,7 +366,7 @@ static void list_build(void)
         lv_obj_add_flag(p, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_flag(p, LV_OBJ_FLAG_EVENT_BUBBLE);
         lv_obj_add_event_cb(p, list_tap, LV_EVENT_CLICKED, (void *)(intptr_t)order[k]);
-        char who, title[120];
+        char who = 0, title[120];
         const char *q = chat_rec(c, 0, &who);
         copy(title, sizeof title, q ? q : "");
         for (char *s = title; *s; s++)
