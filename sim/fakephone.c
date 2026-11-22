@@ -108,15 +108,26 @@ static void on_ask(int what)
 
 void fake_bridge(int mode) { br.mode = mode, ask_app(mode != 0); }
 
+/* the chats' store: RAM here, the flash on the board */
+static unsigned char store[ASK_SLOTS][ASK_SLOT_BYTES];
+static int stored[ASK_SLOTS];
+static void st_save(int slot, const void *d, int len) { memcpy(store[slot], d, (size_t)len), stored[slot] = len; }
+static int st_load(int slot, void *d, int max)
+{
+    int n = stored[slot] < max ? stored[slot] : max;
+    memcpy(d, store[slot], (size_t)n);
+    return n;
+}
+
 const char *fake_bridge_report(void)
 {
-    static char s[96];
-    snprintf(s, sizeof s, "ask=%s app=%d starts=%d stops=%d cancels=%d says=%d", ask_state_name(), ask_app_on(), br.starts, br.stops,
-             br.cancels, br.says);
+    static char s[128];
+    snprintf(s, sizeof s, "ask=%s app=%d starts=%d stops=%d cancels=%d says=%d chats=%d", ask_state_name(), ask_app_on(), br.starts,
+             br.stops, br.cancels, br.says, ask_chat_count());
     return s;
 }
 
-void fake_phone_init(void) { phone_on_command(on_command), phone_on_host(on_host), phone_on_bt(bt_query, bt_act), ask_on_host(on_ask); }
+void fake_phone_init(void) { phone_on_command(on_command), phone_on_host(on_host), phone_on_bt(bt_query, bt_act), ask_on_host(on_ask), ask_on_store(st_save, st_load); }
 
 void fake_host(int arg) /* X0 gone, X1 a computer asks to pair (the code on screen), X2 a paired one is back */
 {

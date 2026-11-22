@@ -91,7 +91,7 @@ struct AssistantView: View {
                     }
                 }
                 Section {
-                    Text("Зажми нижнюю кнопку на лице Пипа, говори, отпусти. Ответ появится на экране; верхняя кнопка — прочитать его вслух с телефона.")
+                    Text("Зажми нижнюю кнопку на лице Пипа, говори, отпусти — ответ придёт чатом. В чате: держи нижнюю — ещё вопрос в том же разговоре, верхняя — Пип прочитает ответ вслух. Все чаты — в меню Пипа, «Ассистент».")
                         .font(.footnote).foregroundStyle(.secondary)
                     if !assistant.phase.isEmpty {
                         HStack {
@@ -217,7 +217,6 @@ struct SettingsView: View {
                         ForEach(Claude.models) { m in Text(m.name).tag(m.id) }
                     }
                     Toggle("Поиск в интернете", isOn: $settings.webSearch)
-                    Stepper("Помнит разговор \(settings.memoryMinutes) мин", value: $settings.memoryMinutes, in: 0 ... 30)
                 }
                 Section {
                     Picker("Язык речи", selection: $settings.language) {

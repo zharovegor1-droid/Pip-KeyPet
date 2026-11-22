@@ -21,13 +21,11 @@ final class Assistant: NSObject, ObservableObject, BridgeDelegate, @unchecked Se
     private let bridge: Bridge
     private let settings: Settings
     private let listener: Listener
-    private var turns: [Claude.Turn] = []
-    private var lastTurnAt = Date.distantPast
+    private var context: [Claude.Turn] = [] // the chat so far, as Pip sends it before each question ("ctx …")
     private var job: Task<Void, Never>?
     private var generation = 0 // a newer question or a cancel makes older answers stale
     private var background: UIBackgroundTaskIdentifier = .invalid
-    private let speaker = AVSpeechSynthesizer()
-    private var lastAnswer = ""
+    private let speaker = Speaker()
 
     init(bridge: Bridge, settings: Settings) {
         self.bridge = bridge
@@ -38,6 +36,8 @@ final class Assistant: NSObject, ObservableObject, BridgeDelegate, @unchecked Se
         listener.onPartial = { [weak self] text in
             self?.live = text
         }
+        speaker.onPacket = { [weak self] packet in self?.bridge.voiceSend(packet) }
+        speaker.onEnd = { [weak self] in self?.bridge.voiceFinish() }
     }
 
     func requestSpeech() {
@@ -51,10 +51,18 @@ final class Assistant: NSObject, ObservableObject, BridgeDelegate, @unchecked Se
     // MARK: BridgeDelegate
 
     func bridge(_ bridge: Bridge, line: String) {
-        if line.hasPrefix("ask start") { start() }
+        if line == "ctx new" { context = [] }
+        else if line.hasPrefix("ctx Q ") { context.append(Claude.Turn(role: "user", content: Assistant.fromPip(line.dropFirst(6)))) }
+        else if line.hasPrefix("ctx A ") { context.append(Claude.Turn(role: "assistant", content: Assistant.fromPip(line.dropFirst(6)))) }
+        else if line.hasPrefix("ask start") { start() }
         else if line == "ask stop" { stop() }
         else if line == "ask cancel" { cancel() }
-        else if line == "ask say" { say() }
+        else if line.hasPrefix("say ") { say(Assistant.fromPip(line.dropFirst(4))) }
+        else if line == "ask hush" { hush() }
+    }
+
+    private static func fromPip(_ s: Substring) -> String {
+        String(s).replacingOccurrences(of: "\t", with: "\n")
     }
 
     func bridge(_ bridge: Bridge, audio: Data) {
@@ -98,14 +106,14 @@ final class Assistant: NSObject, ObservableObject, BridgeDelegate, @unchecked Se
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return }
         cancel()
+        context = []
         ask(q, gen: generation, toPip: false)
     }
 
     private func ask(_ question: String, gen: Int, toPip: Bool) {
         phase = "думаю"
         holdAwake()
-        if Date().timeIntervalSince(lastTurnAt) > Double(settings.memoryMinutes * 60) { turns = [] } // a new conversation
-        let context = turns + [Claude.Turn(role: "user", content: question)]
+        let context = self.context + [Claude.Turn(role: "user", content: question)] // the chat Pip keeps, then this
         let claude = settings.claude
         let system = Claude.system(language: settings.language)
         job = Task { // the assistant lives as long as the app: no weak dance
@@ -113,8 +121,6 @@ final class Assistant: NSObject, ObservableObject, BridgeDelegate, @unchecked Se
                 let answer = try await claude.ask(context, system: system)
                 DispatchQueue.main.async {
                     guard gen == self.generation else { return }
-                    self.turns = Array((context + [Claude.Turn(role: "assistant", content: answer)]).suffix(12))
-                    self.lastTurnAt = Date()
                     self.deliver(answer, question: question, toPip: toPip)
                 }
             } catch {
@@ -130,7 +136,6 @@ final class Assistant: NSObject, ObservableObject, BridgeDelegate, @unchecked Se
     }
 
     private func deliver(_ answer: String, question: String, toPip: Bool) {
-        lastAnswer = answer
         record(question, answer, failed: false, fromPip: toPip)
         if toPip {
             for piece in Assistant.pieces(Assistant.forScreen(answer)) { bridge.send("A " + piece) }
@@ -179,17 +184,25 @@ final class Assistant: NSObject, ObservableObject, BridgeDelegate, @unchecked Se
         }
     }
 
-    // MARK: reading it out (the top key on the answer)
+    // MARK: reading it out on Pip (the top key in the chat)
 
-    func say() {
-        guard !lastAnswer.isEmpty else { return }
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
-        try? session.setActive(true)
-        speaker.stopSpeaking(at: .immediate)
-        let u = AVSpeechUtterance(string: lastAnswer)
-        u.voice = AVSpeechSynthesisVoice(language: settings.language)
-        speaker.speak(u)
+    private func say(_ text: String) {
+        holdAwake()
+        speaker.packetSamples = bridge.voicePacketSamples
+        bridge.voiceBegin()
+        speaker.speak(Assistant.forSpeech(text), language: settings.language)
+    }
+
+    private func hush() {
+        speaker.stop()
+        bridge.voiceStop()
+    }
+
+    /// Said, not read: no markdown marks, no lists' dashes.
+    static func forSpeech(_ s: String) -> String {
+        var t = s
+        for mark in ["**", "__", "`", "#", "\n- ", "\n* "] { t = t.replacingOccurrences(of: mark, with: mark.hasPrefix("\n") ? "\n" : "") }
+        return t
     }
 
     // MARK: text for Pip

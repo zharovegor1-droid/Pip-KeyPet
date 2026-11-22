@@ -29,6 +29,7 @@
 #include "profile.h"
 #include "mic.h"
 #include "ask.h"
+#include "speech.h"
 #include "voice.h"
 
 static const char *TAG = "keypet";
@@ -485,6 +486,30 @@ static void mic_task(void *arg)
     }
 }
 
+/* ---------- the assistant's chats: ASK_SLOTS sectors in the "storage" partition at 1 MB ---------- */
+#define CHATS_AT (1024 * 1024)
+static const esp_partition_t *chats_part(void)
+{
+    static const esp_partition_t *p;
+    if (!p) p = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "storage");
+    return p;
+}
+
+static void chat_save(int slot, const void *data, int len) /* a sector each: erase, write (from the UI task, ~50 ms) */
+{
+    const esp_partition_t *p = chats_part();
+    if (!p || len > ASK_SLOT_BYTES) return;
+    size_t at = CHATS_AT + (size_t)slot * ASK_SLOT_BYTES;
+    if (esp_partition_erase_range(p, at, ASK_SLOT_BYTES) == ESP_OK) esp_partition_write(p, at, data, len);
+}
+
+static int chat_load(int slot, void *data, int max)
+{
+    const esp_partition_t *p = chats_part();
+    if (!p || max > ASK_SLOT_BYTES) return 0;
+    return esp_partition_read(p, CHATS_AT + (size_t)slot * ASK_SLOT_BYTES, data, max) == ESP_OK ? max : 0;
+}
+
 static void audio_task(void *arg)
 {
     esp_codec_dev_handle_t spk = bsp_audio_codec_speaker_init();
@@ -499,14 +524,16 @@ static void audio_task(void *arg)
     static int16_t buf[256];
     bool open = true;
     for (;;) {
-        if (!voice_busy()) {
+        bool says = speech_busy(); /* an answer read aloud (the phone's voice) before his chirps */
+        if (!voice_busy() && !says) {
             /* an open I2S keeps the chip awake: shut it while dark and silent (and the mic, sharing it, is shut) */
             if (open && !panel_want && !mic_on()) esp_codec_dev_close(spk), open = false;
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
         if (!open) open = true, esp_codec_dev_open(spk, &fs), esp_codec_dev_set_out_vol(spk, 70);
-        voice_render(buf, 256);
+        if (says) speech_render(buf, 256);
+        else voice_render(buf, 256);
         esp_codec_dev_write(spk, buf, sizeof buf);
     }
 }
@@ -846,6 +873,7 @@ void app_main(void)
     voice_init(AUDIO_RATE);
     xTaskCreate(sensors_task, "sensors", 4096, NULL, 5, NULL);
     xTaskCreate(audio_task, "audio", 4096, NULL, 6, NULL);
+    ask_on_store(chat_save, chat_load);
     ble_start();
     debug_start();
 }

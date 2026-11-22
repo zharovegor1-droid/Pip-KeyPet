@@ -8,6 +8,7 @@ enum PipUUID {
     static let rx = CBUUID(string: "50495042-5249-4447-4500-000000000002")    // app → Pip: lines
     static let tx = CBUUID(string: "50495042-5249-4447-4500-000000000003")    // Pip → app: lines
     static let audio = CBUUID(string: "50495042-5249-4447-4500-000000000004") // Pip → app: the voice, ADPCM
+    static let speak = CBUUID(string: "50495042-5249-4447-4500-000000000005") // app → Pip: his voice to play, ADPCM
     static let battery = CBUUID(string: "180F")
     static let hid = CBUUID(string: "1812")
 }
@@ -48,7 +49,7 @@ final class Bridge: NSObject, ObservableObject {
         }
     }
 
-    static let protocolVersion = 1
+    static let protocolVersion = 2
 
     @Published private(set) var state: State = .searching
     @Published private(set) var status: PipStatus?
@@ -63,6 +64,9 @@ final class Bridge: NSObject, ObservableObject {
     private var central: CBCentralManager!
     private var pip: CBPeripheral?
     private var rx: CBCharacteristic?
+    private var sp: CBCharacteristic?
+    private var voice: [Data] = []    // packets for Pip's speaker, sent as fast as the link takes them
+    private var voiceEnd = false      // "say off" once they are all out
     private var inbox = Data()
     private var wifiIncoming: [String] = []
     private var timer: Timer?
@@ -90,6 +94,46 @@ final class Bridge: NSObject, ObservableObject {
             let part = Data(data.prefix(chunk))
             pip.writeValue(part, for: rx, type: .withResponse)
             data.removeFirst(part.count)
+        }
+    }
+
+    // MARK: Pip's voice
+
+    /// ADPCM samples per packet for this link (Pip takes up to 480).
+    var voicePacketSamples: Int {
+        guard let pip else { return 352 }
+        return max(32, min(480, (pip.maximumWriteValueLength(for: .withoutResponse) - 4) * 2))
+    }
+
+    func voiceBegin() {
+        voice.removeAll()
+        voiceEnd = false
+        send("say on")
+    }
+
+    func voiceSend(_ packet: Data) {
+        voice.append(packet)
+        pump()
+    }
+
+    func voiceFinish() {
+        voiceEnd = true
+        pump()
+    }
+
+    func voiceStop() {
+        voice.removeAll()
+        voiceEnd = false
+    }
+
+    private func pump() {
+        guard let pip, let sp, state == .ready else { voice.removeAll(); return }
+        while !voice.isEmpty && pip.canSendWriteWithoutResponse {
+            pip.writeValue(voice.removeFirst(), for: sp, type: .withoutResponse)
+        }
+        if voice.isEmpty && voiceEnd {
+            voiceEnd = false
+            send("say off")
         }
     }
 
@@ -168,6 +212,8 @@ final class Bridge: NSObject, ObservableObject {
     private func linkDown() {
         let was = state == .ready
         rx = nil
+        sp = nil
+        voice.removeAll()
         inbox.removeAll()
         firmware = ""
         if was { delegate?.bridge(self, linked: false) }
@@ -209,7 +255,8 @@ final class Bridge: NSObject, ObservableObject {
         case _ where line.hasPrefix("ask start"): note("Пип слушает")
         case "ask stop": note("Пип отпустил кнопку — распознаю")
         case "ask cancel": note("вопрос отменён")
-        case "ask say": note("Пип просит прочитать ответ вслух")
+        case _ where line.hasPrefix("say "): note("Пип читает ответ вслух")
+        case "ask hush": note("Пип попросил замолчать")
         case _ where line.hasPrefix("err "): note("ошибка Пипа: " + String(line.dropFirst(4)))
         case _ where line.hasPrefix("hi "): note("Пип на связи, прошивка \(firmware)")
         default: break
@@ -279,7 +326,7 @@ extension Bridge: CBPeripheralDelegate {
             lastError = "Pip не показывает сервис моста. Прошей свежую прошивку; если уже прошита — выключи и включи Bluetooth на iPhone."
             return
         }
-        peripheral.discoverCharacteristics([PipUUID.rx, PipUUID.tx, PipUUID.audio], for: service)
+        peripheral.discoverCharacteristics([PipUUID.rx, PipUUID.tx, PipUUID.audio, PipUUID.speak], for: service)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
@@ -292,6 +339,7 @@ extension Bridge: CBPeripheralDelegate {
         for c in service.characteristics ?? [] {
             switch c.uuid {
             case PipUUID.rx: rx = c
+            case PipUUID.speak: sp = c
             case PipUUID.tx, PipUUID.audio: peripheral.setNotifyValue(true, for: c)
             default: break
             }
@@ -318,6 +366,10 @@ extension Bridge: CBPeripheralDelegate {
         } else if characteristic.uuid == PipUUID.tx {
             received(value)
         }
+    }
+
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        pump()
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {

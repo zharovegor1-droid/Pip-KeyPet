@@ -26,6 +26,7 @@
 #include "phone.h"
 #include "ask.h"
 #include "adpcm.h"
+#include "speech.h"
 #include "pip.h"
 #include "theme.h"
 #include "esp_app_desc.h"
@@ -513,8 +514,8 @@ static int dbg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
 static ble_uuid128_t DBG, DBG_RX, DBG_TX;
 static uint16_t dbg_tx;
 static int br_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg);
-static ble_uuid128_t BRIDGE, BRIDGE_RX, BRIDGE_TX, BRIDGE_AU;
-static uint16_t br_tx, br_au;
+static ble_uuid128_t BRIDGE, BRIDGE_RX, BRIDGE_TX, BRIDGE_AU, BRIDGE_SP;
+static uint16_t br_tx, br_au, br_sp;
 
 #define HOST_INPUT(id, handle) /* an input report of the computer's service, with its reference (id, input) */             \
     {.uuid = BLE_UUID16_DECLARE(0x2A4D), .access_cb = hid_access, .arg = HOST_REPORT(id), .val_handle = &handle,            \
@@ -561,7 +562,9 @@ static const struct ble_gatt_svc_def services[] = {
      .characteristics = (struct ble_gatt_chr_def[]){
          {.uuid = &BRIDGE_RX.u, .access_cb = br_access, .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE_ENC},
          {.uuid = &BRIDGE_TX.u, .access_cb = br_access, .val_handle = &br_tx, .flags = BLE_GATT_CHR_F_NOTIFY},
-         {.uuid = &BRIDGE_AU.u, .access_cb = br_access, .val_handle = &br_au, .flags = BLE_GATT_CHR_F_NOTIFY}, {0}}},
+         {.uuid = &BRIDGE_AU.u, .access_cb = br_access, .val_handle = &br_au, .flags = BLE_GATT_CHR_F_NOTIFY},
+         {.uuid = &BRIDGE_SP.u, .access_cb = br_access, .val_handle = &br_sp, .flags = BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE_ENC}, /* his voice in */
+         {0}}},
     {0},
 };
 
@@ -804,9 +807,11 @@ void ble_debug_send(const char *s, int n) /* notifications as big as the link al
    It rides the phone's own link (iOS keeps one link to us for the system and every app). Lines end in '\n', either way;
    one may span several writes or notifications. The app subscribes to TX: that is "the app is here".
      app -> Pip   hello | heard <text> | A <piece> ('\t' = new line) | A. | fail <why> | stat? | wifi? | wifi+ <ssid>\t<pass> | wifi- <ssid>
-     Pip -> app   hi <protocol> <firmware> | ask start <rate> | ask stop | ask cancel | ask say | stat {json} | wifi+ <ssid> ... wifi. | ok <what> | err <what>
+     app -> Pip   (also) say on | say off | say fail <why>; and SP writes: his voice to play (ADPCM packets as below)
+     Pip -> app   hi <protocol> <firmware> | ctx new, ctx Q|A <text> (the chat so far) | ask start <rate> | ask stop | ask cancel
+                  | say <text> (read it out: send the voice back) | ask hush | stat {json} | wifi+ <ssid> ... wifi. | ok <what> | err <what>
    The voice: AU notifications, IMA ADPCM at 16 kHz, each packet [seq][predictor i16][index][nibbles] (ui/adpcm.h). */
-#define BR_PROTOCOL 1
+#define BR_PROTOCOL 2
 #define WIFI_MAX 8
 static uint16_t br_conn = BLE_HS_CONN_HANDLE_NONE; /* the link the app subscribed on */
 
@@ -827,7 +832,7 @@ static void br_send(const char *s) /* a line to the app; dropped if the buffers 
         int k = n - at < mtu ? n - at : mtu;
         struct os_mbuf *om = ble_hs_mbuf_from_flat(s + at, (uint16_t)k);
         int rc = om ? ble_gatts_notify_custom(c, br_tx, om) : BLE_HS_ENOMEM;
-        if ((rc == BLE_HS_ENOMEM || rc == BLE_HS_EBUSY) && ++tries < 4) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
+        if ((rc == BLE_HS_ENOMEM || rc == BLE_HS_EBUSY) && ++tries < 20) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
         if (rc) return;
         at += k, tries = 0;
     }
@@ -865,22 +870,41 @@ void ble_audio(const int16_t *pcm, int n) /* from the microphone task while ask_
 
 void ble_audio_end(void) { au_flush(); }
 
+/* a line with a text that may hold new lines (they go as '\t'), on the heap: answers run to 2 KB */
+static void br_send_text(const char *head, const char *text)
+{
+    size_t h = strlen(head), k = strlen(text);
+    char *l = malloc(h + k + 2);
+    if (!l) return;
+    memcpy(l, head, h);
+    for (size_t i = 0; i < k; i++) l[h + i] = text[i] == '\n' || text[i] == '\r' ? '\t' : text[i];
+    l[h + k] = '\n', l[h + k + 1] = 0;
+    br_send(l);
+    free(l);
+}
+
+static void ctx_line(char who, const char *text, void *arg)
+{
+    (void)arg;
+    br_send_text(who == 'Q' ? "ctx Q " : "ctx A ", text);
+}
+
 static void ask_cmd(int what) /* from the UI (its lock held) */
 {
-    char l[32];
     switch (what) {
     case ASK_START:
         if (!aup) aup = heap_caps_calloc(1, sizeof(au_t), MALLOC_CAP_SPIRAM);
         if (!aup) return;
         au.st = (adpcm_t){0}, au.seq = 0, au.n = 0;
-        snprintf(l, sizeof l, "ask start 16000\n");
+        br_send("ctx new\n"); /* the conversation so far, so Claude knows what "and tomorrow?" is about */
+        ask_context(ctx_line, NULL);
+        br_send("ask start 16000\n");
         break;
-    case ASK_STOP: snprintf(l, sizeof l, "ask stop\n"); break;
-    case ASK_CANCEL: snprintf(l, sizeof l, "ask cancel\n"); break;
-    case ASK_SAY: snprintf(l, sizeof l, "ask say\n"); break;
-    default: return;
+    case ASK_STOP: br_send("ask stop\n"); break;
+    case ASK_CANCEL: br_send("ask cancel\n"); break;
+    case ASK_SAY: br_send_text("say ", ask_say_text()); break; /* the phone turns it into a voice and sends it back */
+    case ASK_HUSH: br_send("ask hush\n"); break;
     }
-    br_send(l);
 }
 
 /* ---------- the status ---------- */
@@ -988,6 +1012,9 @@ static void br_line(char *l)
     } else if (!strncmp(l, "A ", 2)) ui(ui_ask_piece, l + 2);
     else if (!strcmp(l, "A.")) ui(ui_ask_done, NULL);
     else if (!strncmp(l, "heard ", 6)) ui(ui_ask_heard, l + 6);
+    else if (!strcmp(l, "say off")) speech_end(); /* the last of the voice is on its way */
+    else if (!strcmp(l, "say on")) speech_stop();  /* a new reading: what was playing goes */
+    else if (!strncmp(l, "say fail ", 9)) ESP_LOGW(TAG, "the phone could not read it out: %s", l + 9);
     else if (!strncmp(l, "fail ", 5)) ui(ui_ask_fail, l + 5);
     else if (!strcmp(l, "stat?")) br_stat();
     else if (!strcmp(l, "wifi?")) wifi_cmd('?', NULL);
@@ -1002,6 +1029,13 @@ static int br_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return 0;
     /* any bonded, encrypted link (WRITE_ENC): which of our roles iOS's link landed in does not matter to the app */
     if (br_conn != conn) br_subscribe(conn, br_tx, true); /* it wrote before it subscribed, or from another link */
+    if (attr == br_sp) { /* a packet of the voice the phone made for him to say */
+        uint8_t pk[ADPCM_HEADER + 256];
+        uint16_t got = 0;
+        ble_hs_mbuf_to_flat(ctxt->om, pk, sizeof pk, &got);
+        speech_feed(pk, got);
+        return 0;
+    }
     static char line[320];
     static int len;
     uint8_t d[256];
@@ -1202,7 +1236,7 @@ static void advertise(void)
 
 /* Bump when the services table changes: phones and computers bonded to the old one are told once (Service Changed, on
    their next connection) to look at our services again instead of trusting the handles they cached. */
-#define GATT_LAYOUT 3 /* 2: the computer's service gained the keyboard and media reports; 3: the bridge service */
+#define GATT_LAYOUT 4 /* 2: the computer's service gained the keyboard and media reports; 3: the bridge service; 4: its voice in */
 
 static void gatt_layout_check(void)
 {
@@ -1248,6 +1282,7 @@ void ble_start(void)
     uuid(&BRIDGE_RX, "50495042-5249-4447-4500-000000000002");
     uuid(&BRIDGE_TX, "50495042-5249-4447-4500-000000000003");
     uuid(&BRIDGE_AU, "50495042-5249-4447-4500-000000000004");
+    uuid(&BRIDGE_SP, "50495042-5249-4447-4500-000000000005");
     if (nimble_port_init() != ESP_OK) { ESP_LOGE(TAG, "NimBLE did not start"); return; }
     ble_npl_callout_init(&again, nimble_port_get_dflt_eventq(), look_again, NULL);
     ble_npl_callout_init(&claim, nimble_port_get_dflt_eventq(), claim_phone, NULL);

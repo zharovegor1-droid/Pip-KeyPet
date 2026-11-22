@@ -3,6 +3,7 @@
 #include "doodle.h"
 #include "mic.h"
 #include "phone.h"
+#include "ask.h"
 #include "pip.h"
 #include "profile.h"
 #include "shell.h"
@@ -769,6 +770,8 @@ const app_t apps[] = {
     {.id = "camera", .name = "Камера", .icon = ICON_CAMERA, .color = 0x30D158, .open = phone_camera_open, .close = phone_camera_close,
      .button = phone_camera_button, .awake = true},
     {.id = "bt", .name = "Bluetooth", .icon = ICON_BT, .color = 0x0A84FF, .open = phone_bt_open, .close = phone_bt_close},
+    {.id = "ask", .name = "Ассистент", .icon = ICON_PIP, .color = 0xBF5AF2, .open = ask_list_open, .close = ask_list_close,
+     .button = ask_list_button, .vertical = true},
     {.id = "settings", .name = "Настройки", .icon = ICON_THEME, .color = 0x8E8E93, .open = settings_open},
 };
 const int app_total = sizeof apps / sizeof apps[0];
