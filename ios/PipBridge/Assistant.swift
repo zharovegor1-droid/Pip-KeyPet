@@ -3,7 +3,7 @@ import Foundation
 import UIKit
 
 /// Push to talk on Pip: "ask start" → the voice comes in → "ask stop" → recognize → Claude → the answer back in pieces.
-final class Assistant: NSObject, ObservableObject, BridgeDelegate {
+final class Assistant: NSObject, ObservableObject, BridgeDelegate, @unchecked Sendable { // used on the main queue only
     struct Exchange: Identifiable {
         let id = UUID()
         let date = Date()
