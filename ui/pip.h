@@ -48,6 +48,8 @@ void pip_pet_rebase(int64_t now); /* the clock jumped (a made-up time replaced b
 void pip_imu(float ax, float ay, float az, float dt); /* accelerometer in g, device axes, see imu.h */
 void pip_button(int id);                          /* short press of a side button */
 bool pip_display_on(void);                        /* false: lying face down, the screen may go dark (nothing is drawn) */
+void pip_sleep(bool on);                          /* sleep: dark, deaf, only the side keys wake him (shell.c) */
+bool pip_sleeping(void);
 void pip_seen(void);                              /* someone touched him or pressed a button: wake the screen */
 enum { PIP_CALL_ANSWERED, PIP_CALL_DECLINED, PIP_CALL_MISSED, PIP_PAIRED };
 void pip_phone(int what);                         /* PIP_CALL_*: how a call went, the phone paired */

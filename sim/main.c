@@ -12,7 +12,7 @@
                  n<name>        pin a mood by name, e.g. nrage (A turns the automatic mood back on)
                  T<hours>       jump the wall clock (the run starts at 2026-10-10 12:00 UTC)
                  o<app>         open an app (notify, music, remote, clock, timer, stopwatch, torch, noise, camera, bt)
-                 P / B          top (PWR) / bottom (BOOT) side button; B<s> holds the bottom one s seconds
+                 P / B          top (PWR) / bottom (BOOT) side button; B<s> holds the bottom one s seconds (P twice: sleep)
                  Y              next menu style (honeycomb, carousel, list)
                  H<n>           theme: 0 Тишина, 1 Приборка, 2 Apple, 3 Диагностика
                  K<knob>=<v>    set a knob (pet_knobs[] in ui/pet.c), e.g. Kloud_db=70
@@ -209,6 +209,8 @@ int main(int argc, char **argv)
         shell_imu(acc[0] + sx, acc[1] + wy, acc[2], dt > 0 ? dt : 1.0f / fps);
         shell_gyro(gyro[0], gyro[1], gyro[2], dt > 0 ? dt : 1.0f / fps);
         if (boot_hold > 0 && (boot_hold -= dt) <= 0) shell_button_up(PIP_BTN_BOOT);
+        static bool slept; /* the board takes Bluetooth off the air while he sleeps */
+        if (shell_asleep() != slept) slept = shell_asleep(), fake_bridge_air(!slept);
         fake_mic(dt);
         shell_time(START + (int64_t)(ts + clock_jump), 0);
         clock_t c0 = clock();
@@ -237,9 +239,9 @@ int main(int argc, char **argv)
     printf("pet: hour=%d\n", in.hour);
     pet_why_t why;
     int base = pet_mood_why(pip_pet(), &why);
-    printf("status: mood=%s reaction=%s steps=%d face_down=%d asleep=%d auto=%d screen=%s theme=%d phone=%s shots=%d base=%s why=%d display=%d eco=%d mic=%d %s %s\n",
+    printf("status: mood=%s reaction=%s steps=%d face_down=%d asleep=%d auto=%d screen=%s theme=%d phone=%s shots=%d base=%s why=%d display=%d sleep=%d eco=%d mic=%d %s %s\n",
            in.mood, in.reaction, in.steps, in.face_down, in.asleep, in.auto_mood, shell_where(), theme_index(),
-           *fake_phone_last() ? fake_phone_last() : "-", fake_phone_shots(), pip_mood_name(base), why.kind, pip_display_on(), pip_eco_on(), pip_mic_wanted(),
+           *fake_phone_last() ? fake_phone_last() : "-", fake_phone_shots(), pip_mood_name(base), why.kind, pip_display_on(), shell_asleep(), pip_eco_on(), pip_mic_wanted(),
            fake_host_report(), fake_bridge_report());
     return pclose(ff) ? 1 : 0;
 }

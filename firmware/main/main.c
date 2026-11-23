@@ -281,7 +281,7 @@ static void pmu_battery(void)
 #define BATLOG_AT (64 * 1024) /* the mood history (debug.c) has the first 24 KB */
 #define BATLOG_SECTORS 4
 #define BATLOG_SLOTS (BATLOG_SECTORS * 4096 / 16)
-typedef struct { uint32_t seq, up_s; uint16_t mv; uint8_t pct, flags, lit, tag[3]; } batrow_t; /* flags: 1 charging, 2 USB, 4 eco */
+typedef struct { uint32_t seq, up_s; uint16_t mv; uint8_t pct, flags, lit, tag[3]; } batrow_t; /* flags: 1 charging, 2 USB, 4 eco, 8 asleep */
 _Static_assert(sizeof(batrow_t) == 16, "a flash slot");
 #define BATROW_OK(r) ((r).tag[0] == 'P' && (r).tag[1] == 'b' && (r).tag[2] == '1')
 static const esp_partition_t *batlog;
@@ -302,7 +302,7 @@ static void batlog_put(int lit_pct)
 {
     if (!batlog || bat.pct < 0) return;
     batrow_t r = {batlog_seq++, (uint32_t)(esp_timer_get_time() / 1000000), (uint16_t)bat.mv, (uint8_t)bat.pct,
-                  (uint8_t)(bat.charging | bat.usb << 1 | pip_eco_on() << 2), (uint8_t)lit_pct, {'P', 'b', '1'}};
+                  (uint8_t)(bat.charging | bat.usb << 1 | pip_eco_on() << 2 | shell_asleep() << 3), (uint8_t)lit_pct, {'P', 'b', '1'}};
     if (batlog_next % 256 == 0) esp_partition_erase_range(batlog, BATLOG_AT + batlog_next * 16, 4096);
     esp_partition_write(batlog, BATLOG_AT + batlog_next * 16, &r, 16);
     batlog_next = (batlog_next + 1) % BATLOG_SLOTS;
@@ -379,14 +379,15 @@ static void sensors_task(void *arg)
     gpio_config(&io);
     int64_t last = esp_timer_get_time(), last_log = last, last_save = last;
     int boot_prev = 1;
+    bool asleep = false; /* put to sleep (shell.c: the top key twice): no accelerometer, Bluetooth off the air */
     float mic_peak = 0;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(20));
+        vTaskDelay(pdMS_TO_TICKS(asleep ? 50 : 20)); /* asleep: only the keys to watch, fewer wakeups */
         int64_t now = esp_timer_get_time();
         float dt = (now - last) / 1e6f, a[3], g[3];
         last = now;
         int boot = gpio_get_level(BOOT_GPIO);
-        bool have_a = imu && qmi_read(a, g), pwr = power && pmu_pwr_pressed();
+        bool have_a = imu && !asleep && qmi_read(a, g), pwr = power && pmu_pwr_pressed(); /* asleep: nobody looks */
 
         ui_lock();
         static bool real_time;
@@ -410,8 +411,12 @@ static void sensors_task(void *arg)
         pip_info_t in;
         pip_get_info(&in);
         panel_want = pip_display_level();
-        bool quiet = pip_eco_on() && !panel_want; /* saving energy: Bluetooth sleeps with the screen */
+        bool z = shell_asleep();
+        bool quiet = (pip_eco_on() && !panel_want) || z; /* saving energy, or put to sleep: Bluetooth sleeps with the screen */
         ui_unlock();
+        if (z != asleep && imu) qmi_write(QMI_CTRL7, z ? 0x00 : 0x03); /* asleep: the accelerometer and the gyroscope off */
+        if (z != asleep) ESP_LOGI(TAG, "%s", z ? "put to sleep: sensors off, Bluetooth off the air" : "woken up");
+        asleep = z;
         boot_prev = boot;
         if (quiet != ble_off) ble_off = quiet, ble_quiet(quiet);
         if (lit_held != (panel_want > 0)) lit_held = panel_want > 0, pm_lit(lit_held);
@@ -463,7 +468,7 @@ static void mic_task(void *arg)
     }
     esp_codec_dev_set_in_gain(mic, MIC_GAIN_DB);
     static int16_t buf[AUDIO_RATE / 50];
-    bool open = true, streamed = false;
+    bool open = true;
     for (int k = 0;; k++) {
         bool stream = ask_streaming(); /* the assistant listens: the voice goes to the iPhone, from the first 20 ms */
         if (k % 25 == 0 || (stream && !open)) { /* twice a second: does anyone listen? (Pip's breath and bangs, the noise meter) */
@@ -476,8 +481,7 @@ static void mic_task(void *arg)
                 ESP_LOGI(TAG, "microphone %s", open ? "on" : "off");
             }
         }
-        if (streamed && !stream) ble_audio_end();
-        streamed = stream;
+        ble_audio_pump(); /* the voice that waits for the link, then "ask stop" */
         if (!open) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
         if (esp_codec_dev_read(mic, buf, sizeof buf) == ESP_CODEC_DEV_OK) {
             if (stream) ble_audio(buf, AUDIO_RATE / 50); /* the words are no bang to be startled by: the meter skips them */

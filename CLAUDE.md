@@ -70,6 +70,14 @@ down, free fall, steps), mic (`mic.c`: dB, blowing; a bang in `pip.c`), battery,
 games (`pip_game`), `pip_seen()` and `pip_wake_up()` (power-on intro) feed it. `pip_feature()` switches inputs off.
 Left alone for `pip_power()` seconds (default 30; touch, buttons, lifting him, notifications count) the screen dims, then sleeps; apps with `.awake` hold it on. Face down for 1 s the screen sleeps (`pip_display_on()`: main.c turns the panel off, pip.c stops drawing, pipsim
 renders black and prints `display=0`); turning it over or any button wakes it (that press does nothing else).
+**Sleep** (shell.c `shell_sleep`, pip.c `pip_sleep`): the top key twice within 400 ms (on his face, in the menu or on the
+dark screen; not in an app, a call or a chat) puts him to sleep: dark like a doze, but a touch, picking him up, turning
+him over or a notification no longer wake him. main.c then turns the QMI8658 off, polls the keys every 50 ms and takes
+Bluetooth off the air (`ble_quiet`, eco or not). Only the keys wake him: the top one twice (the power-on intro), or the
+bottom one held: he wakes listening at once (`ask_press_waking`) - ask.c waits for the bridge app (`wait_app`, up to
+15 s, "жду iPhone…"), ble.c keeps the voice meanwhile (a 20 s PCM queue in PSRAM, pumped by the mic task:
+`ble_audio_pump`, which also sends "ask stop" after the last packet). A tap of the bottom key and he sleeps on.
+Sim: the status has `sleep=`, the fake bridge app goes while he sleeps and is back 1.5 s after he wakes.
 
 **Shell** (`ui/shell.c`): Pip ⇄ menu ⇄ apps, side buttons (top = open, bottom = back; on Pip the bottom one is
 kept free for the assistant's push-to-talk: the top key is the PMU's and never reports its release). `apps[]` in
