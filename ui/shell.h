@@ -39,6 +39,8 @@ extern const int app_count; /* the menu's: the first ones; the grouped ones foll
 extern const int app_total;
 void apps_init(void);                  /* background work that outlives an open app (the timer) */
 void shell_home(void);                 /* back to Pip */
+void shell_sleep(void);                /* to sleep: screen off, only the side keys wake him (the host: Bluetooth off the air) */
+bool shell_asleep(void);
 void shell_updating(void);             /* "Обновление" over everything, held lit: the panel is about to flash */
 int64_t shell_local_time(void);        /* seconds, already shifted to the local zone: feed it to gmtime_r */
 void shell_battery(int percent, bool charging); /* from the power chip; -1 = unknown */

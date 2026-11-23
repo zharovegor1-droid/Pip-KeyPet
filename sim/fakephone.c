@@ -108,6 +108,20 @@ static void on_ask(int what)
 
 void fake_bridge(int mode) { br.mode = mode, ask_app(mode != 0); }
 
+/* asleep, Pip is off the air: the app goes; woken, the phone finds him again after a moment (as iOS reconnects) */
+static lv_timer_t *air_t;
+static void air_back(lv_timer_t *t)
+{
+    lv_timer_delete(t), air_t = NULL;
+    if (br.mode) ask_app(true);
+}
+void fake_bridge_air(bool on)
+{
+    if (air_t) lv_timer_delete(air_t), air_t = NULL;
+    if (!on) { if (br.mode) ask_app(false); return; }
+    air_t = lv_timer_create(air_back, 1500, NULL);
+}
+
 /* the chats' store: RAM here, the flash on the board */
 static unsigned char store[ASK_SLOTS][ASK_SLOT_BYTES];
 static int stored[ASK_SLOTS];

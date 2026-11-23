@@ -26,6 +26,9 @@ static struct {
     lv_obj_t *icons[24], *rows[24], *marker;
     lv_obj_t *bat, *bat_fill; /* the battery at the top of the menu */
     bool updating;            /* shell_updating(): the screen stays lit until the reset */
+    bool pwr_ok;              /* the last top press may be the first of a double one (the sleep) */
+    uint32_t pwr_at;          /* lv_tick of the last top press */
+    bool hold_woke;           /* the bottom key held down woke him: a tap puts him back to sleep */
     lv_obj_t *lens, *lens_rows[24], *lens_cursor, *chrome, *head, *scroll; /* the list's plate; the terminal's header and scroll cells */
     th_cell_t scroll_cells[24];
     int tick_row; /* tick_row: the wheel clicks each time a new row reaches the middle */
@@ -684,11 +687,50 @@ static void dot_tick(lv_timer_t *t)
     if (on == lv_obj_has_flag(sh.dot, LV_OBJ_FLAG_HIDDEN)) lv_obj_set_flag(sh.dot, LV_OBJ_FLAG_HIDDEN, !on);
 }
 
+/* Sleep: the top key twice on his face or in the menu (or on the dark screen) puts him to sleep - screen off,
+   Bluetooth off the air, nothing wakes him but: the top key twice (he wakes up slowly, the power-on intro), or the
+   bottom key held (he wakes listening: the assistant at once; a tap is no question and he sleeps on).
+   The top key is the PMU's: it reports a press, never a release, so a double press is two presses this close. */
+#define DOUBLE_MS 400 /* a deliberate double press; menu -> app at a normal pace is slower */
+
+void shell_sleep(void)
+{
+    if (pip_sleeping()) return;
+    ask_idle();
+    shell_home();
+    sh.pwr_ok = sh.hold_woke = false;
+    pip_sleep(true);
+}
+
+bool shell_asleep(void) { return pip_sleeping(); }
+
+static bool pwr_twice(bool may_start) /* a top press: the second of a double one? */
+{
+    bool twice = sh.pwr_ok && lv_tick_elaps(sh.pwr_at) < DOUBLE_MS;
+    sh.pwr_ok = !twice && may_start, sh.pwr_at = lv_tick_get();
+    return twice;
+}
+
+static void asleep_button(int id)
+{
+    if (id == PIP_BTN_PWR) {
+        if (pwr_twice(true)) pip_sleep(false), pip_wake_up(); /* eyes open out of black, slowly */
+        return;
+    }
+    pip_sleep(false); /* the bottom key: awake and listening at once (the first word often comes with the press) */
+    sh.hold_woke = ask_press_waking();
+}
+
 /* Top (PWR): Pip -> the notifications if the red dot is lit, else the menu -> the app in the middle; apps may use it. Bottom (BOOT): on Pip held = the assistant (ask.c), a tap blinks;
-   back to Pip from the menu, back to the menu from an app unless the app uses it. */
+   back to Pip from the menu, back to the menu from an app unless the app uses it. Twice quickly: sleep (above). */
 void shell_button(int id)
 {
+    if (pip_sleeping()) { asleep_button(id); return; }
     bool dark = !pip_display_on();
+    if (id == PIP_BTN_PWR) {
+        lv_obj_t *on = lv_screen_active(); /* not in an app (the remote pages on it), a call or the assistant's chat */
+        if (pwr_twice((dark || on == sh.pip_scr || on == sh.menu_scr) && !phone_where() && !ask_where())) { shell_sleep(); return; }
+    }
     pip_seen();
     if (dark) return; /* the press that wakes the screen does nothing else */
     if (phone_button(id)) return; /* a call, the pairing or a banner answers first */
@@ -724,7 +766,11 @@ void shell_time(int64_t unix_s, int tz_min)
 
 void shell_button_up(int id)
 {
-    if (id == PIP_BTN_BOOT) ask_release(); /* nothing unless the assistant took the press */
+    if (id == PIP_BTN_BOOT) {
+        bool tap = ask_release(); /* nothing unless the assistant took the press */
+        if (sh.hold_woke && tap) { sh.hold_woke = false; shell_sleep(); return; } /* woken by a tap: back to sleep */
+        sh.hold_woke = false;
+    }
     if (sh.open >= 0 && apps[sh.open].button_up) apps[sh.open].button_up(id);
 }
 

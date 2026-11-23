@@ -40,7 +40,13 @@ EMSCRIPTEN_KEEPALIVE void sim_init(unsigned seed)
 }
 
 EMSCRIPTEN_KEEPALIVE uint16_t *sim_fb(void) { return fb; }
-EMSCRIPTEN_KEEPALIVE void sim_frame(int ms) { lv_tick_inc(ms); lv_timer_handler(); }
+EMSCRIPTEN_KEEPALIVE void sim_frame(int ms)
+{
+    lv_tick_inc(ms);
+    static bool slept; /* the board takes Bluetooth off the air while he sleeps */
+    if (shell_asleep() != slept) slept = shell_asleep(), fake_bridge_air(!slept);
+    lv_timer_handler();
+}
 EMSCRIPTEN_KEEPALIVE void sim_touch(int x, int y, int down) { ptr.x = x; ptr.y = y; ptr.down = down; }
 EMSCRIPTEN_KEEPALIVE void sim_imu(float ax, float ay, float az, float dt) { shell_imu(ax, ay, az, dt); }
 EMSCRIPTEN_KEEPALIVE void sim_gyro(float gx, float gy, float gz, float dt) { shell_gyro(gx, gy, gz, dt); }

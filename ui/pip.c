@@ -177,6 +177,7 @@ static struct {
     float shakes, last_voice;
     float dark_in;  /* > 0: the screen goes dark in this many seconds (lying face down) */
     bool dark;      /* the screen is off: nothing to draw */
+    bool sleep;     /* put to sleep (top key twice): dark, deaf, nothing but the keys wakes him */
     float room_db, mic_t, bang_wait, bang_db, last_bang; /* the room's level, and a bang waiting to be sure it is no breath */
     float sx, sy; /* where the finger went down */
     float glance_x, glance_y, glance_left; /* something on screen worth a look, e.g. a notification */
@@ -228,7 +229,7 @@ static int mood_voice(int mood)
 #define ECO_FRAME_MS 50 /* energy saving: at most 20 frames a second (the face is most of the battery after the panel) */
 void pip_eco(bool on) { s.eco = on; }
 bool pip_eco_on(void) { return s.eco; }
-bool pip_mic_wanted(void) { return HEARS(PIP_F_BLOW) || HEARS(PIP_F_NOISE); }
+bool pip_mic_wanted(void) { return !s.sleep && (HEARS(PIP_F_BLOW) || HEARS(PIP_F_NOISE)); }
 void pip_feature(int f, bool on) { s.feat_off = on ? s.feat_off & ~(1u << f) : s.feat_off | 1u << f; }
 bool pip_feature_on(int f) { return FEAT(f); }
 void *pip_pet(void) { return &s.pet; }
@@ -321,12 +322,24 @@ int pip_display_level(void) { return s.dark ? 0 : pw.dim ? 25 : 100; }
 
 static void light_up(void)
 {
+    if (s.sleep) return; /* asleep: a touch, a notification or picking him up does not wake him */
     pw.idle = 0, pw.dozed = pw.dim = false;
     s.dark = false;
     s.dark_in = s.imu.face_down && FEAT(PIP_F_FACEDOWN) ? DARK_AGAIN_S : 0;
 }
 
 void pip_seen(void) { light_up(); }
+
+/* Sleep: the screen off like a doze, but nothing wakes him except shell.c's keys (top twice, bottom held); the host
+   takes Bluetooth off the air and stops reading the sensors (main.c, shell_asleep()) */
+void pip_sleep(bool on)
+{
+    if (on == s.sleep) return;
+    s.sleep = on;
+    if (on) s.dark = true, s.dark_in = 0, pw.dozed = pw.dim = false;
+    else light_up();
+}
+bool pip_sleeping(void) { return s.sleep; }
 
 const void *pip_pet_state(size_t *size)
 {
@@ -369,6 +382,7 @@ void pip_key(char k)
 
 void pip_imu(float ax, float ay, float az, float dt)
 {
+    if (s.sleep) return; /* the host stops reading the accelerometer anyway */
     int ev = imu_feed(&s.imu, ax, ay, az, dt);
     /* picked up? gravity, smoothed, against how he lay when he dozed off */
     float k = fminf(1, dt * 5);

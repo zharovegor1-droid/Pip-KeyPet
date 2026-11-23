@@ -838,37 +838,63 @@ static void br_send(const char *s) /* a line to the app; dropped if the buffers 
     }
 }
 
-/* ---------- the voice ---------- */
-typedef struct { adpcm_t st; uint8_t seq; int n; int16_t pcm[480]; uint8_t pkt[ADPCM_HEADER + 240]; } au_t;
-static au_t *aup; /* in PSRAM once the assistant first listens: internal RAM is the scarce one */
+/* ---------- the voice ----------
+   Through a queue: the mic task (the only one touching it) appends 20 ms at a time and pumps packets out as fast as the
+   link takes them. Normally it is empty again at once; woken from sleep by the held key, Pip listens before the iPhone
+   is back (ask.c says start when it is), and the first seconds wait here. The UI only raises flags: start (the lines
+   went out, the voice may follow), stop (send "ask stop" after the last packet, so the app hears the whole question),
+   cancel (drop it all). */
+#define AU_QUEUE (16000 * 20) /* 20 s of 16 kHz, 640 KB in PSRAM: the iPhone takes a few seconds to find him again */
+typedef struct {
+    adpcm_t st;
+    uint8_t seq;
+    int head, tail; /* q[head..tail) waits to go */
+    volatile bool start, stop, cancel, started;
+    int16_t *q;
+    uint8_t pkt[ADPCM_HEADER + 240];
+} au_t;
+static au_t *aup; /* in PSRAM from ble_start: internal RAM is the scarce one */
 #define au (*aup)
-
-static void au_flush(void)
-{
-    if (!aup) return;
-    uint16_t c = br_conn;
-    int n = au.n & ~1;
-    au.n = 0;
-    if (c == BLE_HS_CONN_HANDLE_NONE || !n) return;
-    int len = adpcm_packet(&au.st, au.seq++, au.pcm, n, au.pkt);
-    struct os_mbuf *om = ble_hs_mbuf_from_flat(au.pkt, (uint16_t)len);
-    if (om && ble_gatts_notify_custom(c, br_au, om)) ESP_LOGD(TAG, "a voice packet dropped"); /* a 20 ms gap; the next one stands alone */
-}
 
 void ble_audio(const int16_t *pcm, int n) /* from the microphone task while ask_streaming() */
 {
+    if (!aup) return;
+    if (au.tail + n > AU_QUEUE && au.head > 0) /* move what waits to the front */
+        memmove(au.q, au.q + au.head, (size_t)(au.tail - au.head) * 2), au.tail -= au.head, au.head = 0;
+    if (au.tail + n > AU_QUEUE) n = AU_QUEUE - au.tail; /* full: the link never came back, ask.c gives up soon */
+    memcpy(au.q + au.tail, pcm, (size_t)n * 2), au.tail += n;
+    ble_audio_pump();
+}
+
+void ble_audio_pump(void) /* from the microphone task, every 20 ms: the flags, then what the link takes */
+{
+    if (!aup) return;
+    if (au.cancel) au.cancel = au.stop = au.started = false, au.head = au.tail = 0;
+    if (au.start) au.start = false, au.started = true, au.st = (adpcm_t){0}, au.seq = 0;
     uint16_t c = br_conn;
-    if (c == BLE_HS_CONN_HANDLE_NONE || !aup) return;
+    if (!au.started || c == BLE_HS_CONN_HANDLE_NONE) return;
     int per = (ble_att_mtu(c) - 3 - ADPCM_HEADER) * 2; /* as many samples as one notification carries */
     if (per > 480) per = 480;
     if (per < 32) per = 32;
-    for (int i = 0; i < n; i++) {
-        au.pcm[au.n++] = pcm[i];
-        if (au.n >= per) au_flush();
+    for (int k = 0; k < 12; k++) { /* 12 a tick: a waiting backlog goes out several times faster than it was spoken */
+        bool last = au.stop && !ask_streaming();
+        int left = au.tail - au.head, n = left >= per ? per : last ? left & ~1 : 0;
+        if (!n) {
+            if (last) { /* all of it is out: now the app may recognize */
+                au.head = au.tail = 0, au.stop = au.started = false;
+                br_send("ask stop\n");
+            }
+            if (!left) au.head = au.tail = 0;
+            return;
+        }
+        adpcm_t keep = au.st;
+        int len = adpcm_packet(&au.st, au.seq, au.q + au.head, n, au.pkt);
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(au.pkt, (uint16_t)len);
+        int rc = om ? ble_gatts_notify_custom(c, br_au, om) : BLE_HS_ENOMEM;
+        if (rc) { au.st = keep; return; } /* the link's buffers are full: the rest next tick */
+        au.seq++, au.head += n;
     }
 }
-
-void ble_audio_end(void) { au_flush(); }
 
 /* a line with a text that may hold new lines (they go as '\t'), on the heap: answers run to 2 KB */
 static void br_send_text(const char *head, const char *text)
@@ -893,15 +919,19 @@ static void ask_cmd(int what) /* from the UI (its lock held) */
 {
     switch (what) {
     case ASK_START:
-        if (!aup) aup = heap_caps_calloc(1, sizeof(au_t), MALLOC_CAP_SPIRAM);
         if (!aup) return;
-        au.st = (adpcm_t){0}, au.seq = 0, au.n = 0;
         br_send("ctx new\n"); /* the conversation so far, so Claude knows what "and tomorrow?" is about */
         ask_context(ctx_line, NULL);
         br_send("ask start 16000\n");
+        au.start = true; /* the voice follows the lines (the mic task sends it, the kept seconds first) */
         break;
-    case ASK_STOP: br_send("ask stop\n"); break;
-    case ASK_CANCEL: br_send("ask cancel\n"); break;
+    case ASK_STOP:
+        if (aup) au.stop = true; /* the mic task says it after the last of the voice */
+        break;
+    case ASK_CANCEL:
+        if (aup) au.cancel = true;
+        br_send("ask cancel\n");
+        break;
     case ASK_SAY: br_send_text("say ", ask_say_text()); break; /* the phone turns it into a voice and sends it back */
     case ASK_HUSH: br_send("ask hush\n"); break;
     }
@@ -1283,6 +1313,9 @@ void ble_start(void)
     uuid(&BRIDGE_TX, "50495042-5249-4447-4500-000000000003");
     uuid(&BRIDGE_AU, "50495042-5249-4447-4500-000000000004");
     uuid(&BRIDGE_SP, "50495042-5249-4447-4500-000000000005");
+    aup = heap_caps_calloc(1, sizeof(au_t), MALLOC_CAP_SPIRAM);
+    if (aup && !(au.q = heap_caps_malloc(AU_QUEUE * 2, MALLOC_CAP_SPIRAM))) free(aup), aup = NULL;
+    if (!aup) ESP_LOGW(TAG, "no PSRAM for the assistant's voice");
     if (nimble_port_init() != ESP_OK) { ESP_LOGE(TAG, "NimBLE did not start"); return; }
     ble_npl_callout_init(&again, nimble_port_get_dflt_eventq(), look_again, NULL);
     ble_npl_callout_init(&claim, nimble_port_get_dflt_eventq(), claim_phone, NULL);

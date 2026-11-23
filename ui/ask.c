@@ -13,6 +13,7 @@
 #define TAP_MS 350         /* let go sooner: a tap (a blink on his face, back in a chat), not a question */
 #define LISTEN_MAX_MS 30000
 #define THINK_MAX_MS 45000
+#define WAKE_WAIT_MS 15000 /* woken by the held key: the iPhone has this long to come back (the voice waits on the host) */
 #define CONTEXT_MAX 2500   /* what of a long chat goes to Claude */
 #define MAGIC 0x31484350u  /* "PCH1" */
 
@@ -41,6 +42,8 @@ typedef struct {
 static struct {
     int state;
     bool app, down, in_chat; /* in_chat: the key went down in an open chat (a tap goes back) */
+    bool wait_app, stop_due; /* woke up listening: the app is not back yet (ask start goes when it is); let go meanwhile */
+    uint32_t wait_since;
     volatile bool streaming;
     uint32_t down_at, since; /* lv_tick: the key went down; the state began */
     char heard[200];
@@ -455,7 +458,7 @@ static void go(int state)
     a.since = lv_tick_get();
     if (!a.t) a.t = lv_timer_create(tick, 100, NULL);
     if (state != ASK_LISTEN) a.streaming = false;
-    if (state == ASK_IDLE || state == ASK_CHAT) strip_hide();
+    if (state == ASK_IDLE || state == ASK_CHAT) strip_hide(), a.wait_app = a.stop_due = false;
     pip_info_t in;
     pip_get_info(&in);
     if (state != ASK_LISTEN && state != ASK_THINK && (!strcmp(in.reaction, "listen") || !strcmp(in.reaction, "think")))
@@ -472,7 +475,7 @@ static void go(int state)
 static void fail(const char *why)
 {
     copy(a.fail, sizeof a.fail, why);
-    if (a.state == ASK_LISTEN) send(ASK_CANCEL);
+    if (a.state == ASK_LISTEN || a.wait_app) send(ASK_CANCEL); /* the host drops the voice it kept */
     go(ASK_CHAT);
     page_build();
     pip_react(PIP_PUZZLED, 2.5f, "no answer");
@@ -481,10 +484,11 @@ static void fail(const char *why)
 static void think(void)
 {
     a.streaming = false;
-    send(ASK_STOP);
+    if (a.wait_app) a.stop_due = true; /* the voice waits on the host: start, then stop, when the app is back */
+    else send(ASK_STOP);
     go(ASK_THINK);
     if (a.o) page_build();
-    else strip_show("думаю…"), pip_react(PIP_SKEPTICAL, THINK_MAX_MS / 1000.0f, "think");
+    else strip_show(a.wait_app ? "жду iPhone…" : "думаю…"), pip_react(PIP_SKEPTICAL, THINK_MAX_MS / 1000.0f, "think");
 }
 
 static void tick(lv_timer_t *t)
@@ -493,23 +497,25 @@ static void tick(lv_timer_t *t)
     uint32_t in = lv_tick_elaps(a.since);
     bool held = a.state == ASK_LISTEN && a.down && lv_tick_elaps(a.down_at) >= TAP_MS;
     if (held && !a.in_chat && !a.strip) strip_show("слушаю…");
-    if (a.state == ASK_LISTEN && in > LISTEN_MAX_MS) a.down = false, think(); /* he can only hold his breath so long */
+    if (a.wait_app && lv_tick_elaps(a.wait_since) > WAKE_WAIT_MS) a.down = false, fail("Нет связи с iPhone. Открой Pip Bridge.");
+    else if (a.state == ASK_LISTEN && in > LISTEN_MAX_MS) a.down = false, think(); /* he can only hold his breath so long */
     else if (a.state == ASK_THINK && in > THINK_MAX_MS) fail("Ответ не пришёл. Попробуй ещё раз.");
     if (a.state == ASK_LISTEN && !a.in_chat) pip_react(PIP_CURIOUS, 1, "listen"); /* held for as long as he listens */
     if (speech_busy() != a.spoke) a.spoke = speech_busy(), page_hint();
 }
 
 /* the key went down: listening starts at once (the first word often comes with the press) */
-static void listen(bool in_chat)
+static void listen(bool in_chat, bool waking)
 {
     a.down = true, a.down_at = lv_tick_get(), a.in_chat = in_chat;
     if (a.answering && a.answer && a.len && a.work) chat_push(a.work, 'A', a.answer), chat_keep();
     a.heard[0] = a.fail[0] = 0, a.q_done = a.answering = false, a.len = 0;
     if (!in_chat) chat_new(); /* from his face: a new conversation */
     speech_stop();
-    if (!a.app) return; /* decided when it is let go: a tap blinks (or goes back), a hold says the app is missing */
+    if (!a.app && !waking) return; /* decided when it is let go: a tap blinks (or goes back), a hold says the app is missing */
     go(ASK_LISTEN);
-    send(ASK_START);    /* first: the host sends the conversation and gets ready for the voice */
+    if (a.app) send(ASK_START); /* first: the host sends the conversation and gets ready for the voice */
+    else a.wait_app = true, a.wait_since = lv_tick_get(); /* just woken: Bluetooth is coming back, the host keeps the voice */
     a.streaming = true;
     if (a.o) page_build(); /* "слушаю…" at the bottom of the chat */
 }
@@ -517,13 +523,28 @@ static void listen(bool in_chat)
 bool ask_press(void)
 {
     if (a.state != ASK_IDLE) return false;
-    listen(false);
+    listen(false, false);
     return true;
 }
 
-void ask_release(void)
+bool ask_press_waking(void)
 {
-    if (!a.down) return;
+    if (a.state != ASK_IDLE) return false;
+    listen(false, true);
+    return true;
+}
+
+void ask_idle(void)
+{
+    if (a.state == ASK_IDLE) return;
+    if (a.state == ASK_LISTEN || a.state == ASK_THINK) send(ASK_CANCEL);
+    a.down = false;
+    go(ASK_IDLE);
+}
+
+bool ask_release(void)
+{
+    if (!a.down) return false;
     a.down = false;
     bool tap = lv_tick_elaps(a.down_at) < TAP_MS;
     if (a.state == ASK_LISTEN) {
@@ -540,13 +561,14 @@ void ask_release(void)
         work();
         fail("Нет связи с iPhone. Открой Pip Bridge.");
     }
+    return tap;
 }
 
 bool ask_button(int id)
 {
     switch (a.state) {
     case ASK_CHAT:
-        if (id == PIP_BTN_BOOT) listen(true); /* held: more in this chat; a tap goes back (on release) */
+        if (id == PIP_BTN_BOOT) listen(true, false); /* held: more in this chat; a tap goes back (on release) */
         else if (speech_busy()) speech_stop(), send(ASK_HUSH), page_hint();
         else if (!a.answering && *ask_say_text() && a.app) send(ASK_SAY), pip_react(PIP_HAPPY, 1.5f, "reads"), page_hint();
         return true;
@@ -566,7 +588,18 @@ bool ask_button(int id)
 void ask_app(bool on)
 {
     a.app = on;
-    if (!on && (a.state == ASK_LISTEN || a.state == ASK_THINK)) fail("iPhone отключился.");
+    if (on && a.wait_app) { /* back after the sleep: now the question starts, with the voice the host kept */
+        a.wait_app = false;
+        send(ASK_START);
+        if (a.stop_due) {
+            a.stop_due = false;
+            send(ASK_STOP);
+            a.since = lv_tick_get(); /* the answer's time starts now */
+            if (a.strip) strip_show("думаю…");
+        }
+        return;
+    }
+    if (!on && !a.wait_app && (a.state == ASK_LISTEN || a.state == ASK_THINK)) fail("iPhone отключился.");
 }
 
 void ask_heard(const char *text)

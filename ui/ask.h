@@ -34,7 +34,9 @@ void ask_on_store(void (*save)(int slot, const void *data, int len), int (*load)
 
 /* ---------- for the shell ---------- */
 bool ask_press(void);         /* the bottom key went down on Pip's face: true = the assistant took it */
-void ask_release(void);       /* the bottom key let go */
+bool ask_press_waking(void);  /* the same, woken from sleep by it: listens before the app is back (the host keeps the voice) */
+bool ask_release(void);       /* the bottom key let go; true: it was a tap */
+void ask_idle(void);          /* put to sleep: whatever the assistant was doing is over */
 bool ask_button(int id);      /* while ask_where(): the side buttons are the assistant's */
 const char *ask_where(void);  /* "ask" while listening, thinking or a chat is open; NULL otherwise */
 int ask_state(void);

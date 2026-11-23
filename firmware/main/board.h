@@ -8,9 +8,9 @@ void ui_unlock(void);
 extern int tz_min;    /* local time zone, minutes east of UTC; the iPhone sets it */
 
 void ble_start(void); /* the iPhone link: ANCS notifications and calls, AMS music, CTS time */
-void ble_quiet(bool quiet);
+void ble_quiet(bool quiet); /* every link down and no advertising (saving energy, asleep); false: back on air */
 void ble_audio(const int16_t *pcm, int n); /* the microphone, 16 kHz, to the PipBridge app while the assistant listens */
-void ble_audio_end(void);                  /* let go: the last short packet */ /* every link down and no advertising (saving energy while asleep); false: back on air */
+void ble_audio_pump(void);                 /* the mic task, every 20 ms: what waits goes out, then "ask stop" */
 void batlog_dump(void (*out)(const char *)); /* the battery log as "@B seq uptime_s mV % flags lit%" rows, then "@B end" */
 void batlog_clear(void);
 
