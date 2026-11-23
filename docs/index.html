@@ -303,7 +303,7 @@ const fw = window.PIP_FIRMWARE;
 $('fwinfo').textContent = fw ? `В панели прошивка ${fw.version} от ${fw.built}.` : 'Файл прошивки не найден (docs/firmware/firmware.js).';
 
 /* ---------- the link: a USB serial port (Web Serial) or Bluetooth ---------- */
-let port = null, reader = null, reading = null, ble = null, bleq = Promise.resolve(), alive = 0, cfg = null;
+let port = null, reader = null, reading = null, flasher = null, ble = null, bleq = Promise.resolve(), alive = 0, cfg = null;
 const enc = new TextEncoder();
 async function send(c) {
   if (port && port.writable) { const w = port.writable.getWriter(); await w.write(enc.encode(c + '\n')); w.releaseLock(); }
@@ -349,11 +349,19 @@ async function readLoop() {
 }
 async function openPort(p) {
   if (port) await closePort(); /* "Подключить" again: our own old connection goes first */
+  /* the flasher of a failed or interrupted flash still holds the port with its own reader: let it go */
+  if (flasher) { try { await flasher.disconnect(); } catch (e) {} flasher = null; }
   try { await p.open({baudRate: 115200}); }
   catch (e) {
     if (!/already open/i.test(e.message || '')) throw e;
-    try { await p.close(); } catch (e2) {} /* left open by this page before (a reconnect, a flash): shut and retry */
-    await p.open({baudRate: 115200});
+    /* left open by this page before (a reconnect, a flash). Free and still open: just use it. Else shut it and retry */
+    if (!(p.readable && !p.readable.locked && p.writable && !p.writable.locked)) {
+      for (let i = 0; i < 10 && (p.readable || p.writable); i++) {
+        try { await p.close(); } catch (e2) { await new Promise(r => setTimeout(r, 200)); }
+      }
+      try { await p.open({baudRate: 115200}); }
+      catch (e3) { throw new Error('порт занят чем-то на этой странице. Обнови страницу (F5) и подключи снова'); }
+    }
   }
   port = p;
   try { await port.setSignals({dataTerminalReady: false, requestToSend: false}); } catch (e) {}
@@ -467,7 +475,7 @@ $('flash').onclick = async () => {
     for (let t = 0; !cfg && t < 60; t++) await new Promise(r => setTimeout(r, 100));
     if (cfg) { await send('update'); await new Promise(r => setTimeout(r, 600)); }
     const p = await closePort();
-    const transport = new Transport(p, true);
+    const transport = flasher = new Transport(p, true);
     const loader = new ESPLoader({transport, baudrate: 921600, terminal: {clean() {}, writeLine() {}, write() {}}});
     $('flashState').textContent = 'Связываюсь с брелоком...';
     await loader.main();
@@ -490,11 +498,14 @@ $('flash').onclick = async () => {
     await new Promise(r => setTimeout(r, 150));
     await transport.setRTS(false);
     await transport.disconnect();
+    flasher = null;
     $('prog').style.width = '100%';
     $('flashState').textContent = 'Готово! Пип перезагружается. Через несколько секунд нажми «Подключить по кабелю», чтобы настроить его.';
     state('Не подключён', false);
   } catch (e) {
     $('flashState').textContent = 'Не получилось: ' + (e.message || e) + '. Загляни в «Не получается?» ниже.';
+    if (flasher) { try { await flasher.disconnect(); } catch (e2) {} flasher = null; } /* or the port stays taken */
+    state('Не подключён', false);
   }
   $('flash').disabled = false;
 };
